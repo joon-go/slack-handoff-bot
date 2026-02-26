@@ -1,0 +1,9 @@
+[Unit]
+Description=Run APAC snapshot daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Timezone=America/Los_Angeles
+
+[Install]
+WantedBy=timers.target

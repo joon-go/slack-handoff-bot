@@ -1,0 +1,9 @@
+[Unit]
+Description=Run US snapshot daily
+
+[Timer]
+OnCalendar=*-*-* 18:00:00
+Timezone=America/Los_Angeles
+
+[Install]
+WantedBy=timers.target

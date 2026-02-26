@@ -1,0 +1,9 @@
+[Unit]
+Description=Run EMEA snapshot daily
+
+[Timer]
+OnCalendar=*-*-* 10:00:00
+Timezone=America/Los_Angeles
+
+[Install]
+WantedBy=timers.target

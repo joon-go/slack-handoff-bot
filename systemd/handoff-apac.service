@@ -1,0 +1,6 @@
+[Unit]
+Description=Handoff snapshot APAC
+
+[Service]
+ExecStart=/usr/bin/node /opt/handoff/handoff_snapshot.mjs apac
+EnvironmentFile=/opt/handoff/.env
