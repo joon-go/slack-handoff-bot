@@ -765,15 +765,29 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
     if (!hasNext || !nextCursor) break;
 
-    // Early stop if we've paged past the lookback window
-    const oldestUtc = data
+    // Early stop if we've paged past ALL relevant cutoffs.
+    // We check both created_at and updated_at: issues created long ago may have
+    // been recently updated (e.g. moved to waiting_on_you), so we must keep
+    // paging as long as any issue on the page has a recent enough updated_at.
+    const oldestCreatedUtc = data
       .map((i) => parseUtcIso(i.created_at))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
-    if (oldestUtc && oldestUtc < lookbackCutoffUtc) {
+    const oldestUpdatedUtc = data
+      .map((i) => parseUtcIso(i.updated_at))
+      .filter(Boolean)
+      .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
+
+    // Only stop when the oldest created_at is past the lookback AND the oldest
+    // updated_at is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
+    // This ensures we don't miss old issues that were recently moved to waiting_on_you.
+    const createdPastLookback = oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc;
+    const updatedPastAllCutoffs = oldestUpdatedUtc && oldestUpdatedUtc < waitP2P3CutoffUtc;
+
+    if (createdPastLookback && updatedPastAllCutoffs) {
       console.log(
-        `[SCAN-B] early-stop: oldest=${oldestUtc.toISO()} < cutoff=${lookbackCutoffUtc.toISO()}`
+        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestUpdated=${oldestUpdatedUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
       );
       break;
     }
