@@ -78,6 +78,8 @@ systemctl restart handoff-emea.service
 - FR SLA Pending P0/P1 count with issue line items
 - FR SLA Pending P2/P3 count
 - FR SLA Pending aged > 1 week with issue line items
+- P0/P1 Waiting on Support > 1 day with issue line items
+- P2/P3 Waiting on Support > 4 days with issue line items
 - Open handoff tickets with region, assignee, and meeting-required flag
 
 ## Owner
