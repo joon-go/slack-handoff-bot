@@ -399,6 +399,19 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
     .join("\n");
 }
 
+function buildWaitingOnSupportLines(list, assigneeIdToName) {
+  const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
+  return sorted
+    .map((it) => {
+      const issueLink = `<${pylonIssueUrl(it.id)}|#${it.number}>`;
+      const assignee =
+        it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
+      const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
+      return `${it.priorityLabel} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+    })
+    .join("\n");
+}
+
 /** ----------------------------
  *  ASSIGNMENT BREAKDOWN (new tickets)
  *  ---------------------------- */
@@ -450,12 +463,18 @@ function buildSlackHandoffMessage({
   frAgedAll,
   p0p1IssueLines,
   agedIssueLines,
+  waitP0P1,
+  waitP0P1Lines,
+  waitP2P3,
+  waitP2P3Lines,
   handoffIssues,
   handoffIssueLines,
 }) {
   const eP0P1 = statusEmoji({ count: frP0P1, alertLevel: "critical" });
   const eP2P3 = statusEmoji({ count: frP2P3 });
   const eAged = statusEmoji({ count: frAgedAll });
+  const eWaitP0P1 = statusEmoji({ count: waitP0P1, alertLevel: "critical" });
+  const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
   const eHandoff = statusEmoji({ count: handoffIssues });
 
   const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|FR SLA Pending P0/P1>`;
@@ -483,6 +502,18 @@ ${eAged} FR SLA Pending Aged > 1 Week: ${frAgedAll}`;
 
   if (frAgedAll > 0 && agedIssueLines) {
     msg += `\n${agedIssueLines}`;
+  }
+
+  msg += `\n${eWaitP0P1} P0/P1 Waiting on Support > 1 day: ${waitP0P1}`;
+
+  if (waitP0P1 > 0 && waitP0P1Lines) {
+    msg += `\n${waitP0P1Lines}`;
+  }
+
+  msg += `\n${eWaitP2P3} P2/P3 Waiting on Support > 4 days: ${waitP2P3}`;
+
+  if (waitP2P3 > 0 && waitP2P3Lines) {
+    msg += `\n${waitP2P3Lines}`;
   }
 
   msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
@@ -585,6 +616,8 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
   const agedCutoffUtc = nowPt.minus({ days: 7 }).toUTC();
+  const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
+  const waitP2P3CutoffUtc = nowPt.minus({ days: 4 }).toUTC();
 
   // SCAN-B lookback window (performance optimization)
   // We stop paging once issues are older than this many days.
@@ -598,11 +631,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frAgedAll: new Set(),
     handoff: new Set(),
     discordCommunityOpen: new Set(),
+    waitP0P1: new Set(),
+    waitP2P3: new Set(),
   };
 
   const handoffDisplay = new Map();
   const agedDetails = new Map();
   const p0p1Details = new Map();
+  const waitP0P1Details = new Map();
+  const waitP2P3Details = new Map();
 
   let cursor = null;
   const seenCursors = new Set();
@@ -662,6 +699,39 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
+      // Waiting on Support (state=waiting_on_you, updated_at older than threshold)
+      if (issue.state === "waiting_on_you") {
+        const updatedAtUtc = parseUtcIso(issue.updated_at);
+
+        // P0/P1 waiting > 1 day
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP0P1CutoffUtc) {
+          ids.waitP0P1.add(issue.id);
+          if (!waitP0P1Details.has(issue.id)) {
+            waitP0P1Details.set(issue.id, {
+              id: issue.id,
+              number: issue.number,
+              priorityLabel: prioLabel,
+              assigneeId: issue?.assignee?.id ?? null,
+              subject: issue?.title ?? "(No subject)",
+            });
+          }
+        }
+
+        // P2/P3 waiting > 4 days
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP2P3CutoffUtc) {
+          ids.waitP2P3.add(issue.id);
+          if (!waitP2P3Details.has(issue.id)) {
+            waitP2P3Details.set(issue.id, {
+              id: issue.id,
+              number: issue.number,
+              priorityLabel: prioLabel,
+              assigneeId: issue?.assignee?.id ?? null,
+              subject: issue?.title ?? "(No subject)",
+            });
+          }
+        }
+      }
+
       // Open handoff issues
       if (isOpenHandoffIssue(issue)) {
         ids.handoff.add(issue.id);
@@ -690,20 +760,34 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} waitP0P1=${ids.waitP0P1.size} waitP2P3=${ids.waitP2P3.size}`
     );
 
     if (!hasNext || !nextCursor) break;
 
-    // Early stop if we've paged past the lookback window
-    const oldestUtc = data
+    // Early stop if we've paged past ALL relevant cutoffs.
+    // We check both created_at and updated_at: issues created long ago may have
+    // been recently updated (e.g. moved to waiting_on_you), so we must keep
+    // paging as long as any issue on the page has a recent enough updated_at.
+    const oldestCreatedUtc = data
       .map((i) => parseUtcIso(i.created_at))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
-    if (oldestUtc && oldestUtc < lookbackCutoffUtc) {
+    const oldestUpdatedUtc = data
+      .map((i) => parseUtcIso(i.updated_at))
+      .filter(Boolean)
+      .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
+
+    // Only stop when the oldest created_at is past the lookback AND the oldest
+    // updated_at is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
+    // This ensures we don't miss old issues that were recently moved to waiting_on_you.
+    const createdPastLookback = oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc;
+    const updatedPastAllCutoffs = oldestUpdatedUtc && oldestUpdatedUtc < waitP2P3CutoffUtc;
+
+    if (createdPastLookback && updatedPastAllCutoffs) {
       console.log(
-        `[SCAN-B] early-stop: oldest=${oldestUtc.toISO()} < cutoff=${lookbackCutoffUtc.toISO()}`
+        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestUpdated=${oldestUpdatedUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
       );
       break;
     }
@@ -738,6 +822,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
       ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
       : "";
 
+  const waitP0P1Lines =
+    ids.waitP0P1.size > 0
+      ? buildWaitingOnSupportLines(Array.from(waitP0P1Details.values()), assigneeIdToName)
+      : "";
+
+  const waitP2P3Lines =
+    ids.waitP2P3.size > 0
+      ? buildWaitingOnSupportLines(Array.from(waitP2P3Details.values()), assigneeIdToName)
+      : "";
+
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
@@ -745,6 +839,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     p0p1IssueLines,
     agedIssueLines,
     discordCommunityOpen: ids.discordCommunityOpen.size,
+    waitP0P1: ids.waitP0P1.size,
+    waitP0P1Lines,
+    waitP2P3: ids.waitP2P3.size,
+    waitP2P3Lines,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -817,6 +915,10 @@ async function main() {
     frAgedAll: metrics.frAgedAll,
     p0p1IssueLines: metrics.p0p1IssueLines,
     agedIssueLines: metrics.agedIssueLines,
+    waitP0P1: metrics.waitP0P1,
+    waitP0P1Lines: metrics.waitP0P1Lines,
+    waitP2P3: metrics.waitP2P3,
+    waitP2P3Lines: metrics.waitP2P3Lines,
     handoffIssues: metrics.handoffIssues,
     handoffIssueLines: metrics.handoffIssueLines,
   });
@@ -834,6 +936,8 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
+    waitP0P1: metrics.waitP0P1,
+    waitP2P3: metrics.waitP2P3,
     handoffIssues: metrics.handoffIssues,
     scanBLookbackDays: metrics.lookbackDays,
     enforcedTeamId: TEAM_ID_L1_L2,
