@@ -50,7 +50,8 @@ import { DateTime } from "luxon";
 const PYLON_API_BASE = "https://api.usepylon.com";
 
 // ✅ Ready for Prod
-const SLACK_CHANNEL = "#csorg-support-handoff";
+const SLACK_CHANNEL =
+  process.env.SLACK_CHANNEL ?? "#csorg-support-handoff";
 
 // Team "L1+L2" (enforced locally)
 const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
@@ -316,13 +317,10 @@ async function pylonSearch({ token, limit = 200, cursor = null }) {
  *
  * Returns DateTime (UTC) or null if no customer message found.
  */
-async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
-  const maxAttempts = 4;
-  let attempt = 0;
+async function fetchLatestPublicMessageMeta({ pylonToken, issueId }) {
+  const maxAttempts = 5;
 
-  while (true) {
-    attempt += 1;
-
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}/messages`, {
       method: "GET",
       headers: {
@@ -331,43 +329,80 @@ async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
       },
     });
 
-    if (res.status === 429) {
-      if (attempt >= maxAttempts) return null;
-      const retryAfterMs = Math.min(30000, 750 * 2 ** (attempt - 1));
-      await sleep(retryAfterMs);
+    if (res.ok) {
+      const json = await res.json();
+      const messages = Array.isArray(json.data) ? json.data : [];
+
+      let latestPublicMsg = null;
+      let latestPublicSpeaker = null;
+      let latestCustomerMsg = null;
+
+      for (const msg of messages) {
+        if (msg.is_private) continue;
+
+        const msgTime = parseUtcIso(msg.timestamp || msg.created_at);
+        if (!msgTime) continue;
+
+        const isCustomer =
+          !!msg?.author?.contact ||
+          msg?.author?.type === "contact";
+
+        const isSupport = !!msg?.author?.user;
+
+        if (!latestPublicMsg || msgTime > latestPublicMsg) {
+          latestPublicMsg = msgTime;
+          latestPublicSpeaker = isCustomer ? "customer" : isSupport ? "support" : "other";
+        }
+
+        if (isCustomer && (!latestCustomerMsg || msgTime > latestCustomerMsg)) {
+          latestCustomerMsg = msgTime;
+        }
+      }
+
+      return {
+        latestPublicMsg,
+        latestPublicSpeaker,
+        latestCustomerMsg,
+      };
+    }
+
+    if (res.status === 429 && attempt < maxAttempts) {
+      const retryAfterHeader = res.headers.get("retry-after");
+      const retryAfterSeconds = Number.parseInt(retryAfterHeader || "", 10);
+      const baseDelayMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : 1000 * (2 ** (attempt - 1));
+      const jitterMs = Math.floor(Math.random() * 250);
+      const delayMs = baseDelayMs + jitterMs;
+
+      console.warn(`[RATE_LIMIT] issueId=${issueId} attempt=${attempt}/${maxAttempts} sleepingMs=${delayMs}`);
+      await sleep(delayMs);
       continue;
     }
 
-    const text = await res.text();
-    let json;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      console.warn(`[MESSAGES] Non-JSON response for issue ${issueId}: ${text.slice(0, 200)}`);
-      return null;
-    }
-
-    if (!res.ok) {
-      console.warn(`[MESSAGES] Failed for issue ${issueId} (${res.status})`);
-      return null;
-    }
-
-    const messages = Array.isArray(json.data) ? json.data : [];
-
-    // Find the most recent customer message (author.contact is populated)
-    let latestCustomerMsg = null;
-    for (const msg of messages) {
-      if (!msg?.author?.contact) continue; // skip agent/internal messages
-      if (msg.is_private) continue; // skip private notes
-
-      const msgTime = parseUtcIso(msg.created_at);
-      if (msgTime && (!latestCustomerMsg || msgTime > latestCustomerMsg)) {
-        latestCustomerMsg = msgTime;
-      }
-    }
-
-    return latestCustomerMsg;
+    throw new Error(`Failed to fetch messages for issue ${issueId}: ${res.status}`);
   }
+
+  throw new Error(`Failed to fetch messages for issue ${issueId}: exhausted retries`);
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Map();
+  let index = 0;
+
+  async function runner() {
+    while (true) {
+      const currentIndex = index;
+      index += 1;
+      if (currentIndex >= items.length) return;
+
+      const item = items[currentIndex];
+      const value = await worker(item, currentIndex);
+      results.set(item, value ?? null);
+    }
+  }
+
+  const concurrency = Math.max(1, Math.min(limit, items.length || 1));
+  await Promise.all(Array.from({ length: concurrency }, () => runner()));
+  return results;
 }
 
 /**
@@ -883,19 +918,33 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
   if (allWaitCandidates.size > 0) {
     console.log(`[SCAN-B] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API...`);
-    for (const issueId of allWaitCandidates.keys()) {
-      const lastCustMsg = await fetchLastCustomerMessageTime({ pylonToken, issueId });
+
+    const issueIds = Array.from(allWaitCandidates.keys());
+    const concurrency = Number(process.env.PYLON_MESSAGES_CONCURRENCY || 6);
+    const resolved = await mapWithConcurrency(issueIds, concurrency, async (issueId) => {
+      const msgMeta = await fetchLatestPublicMessageMeta({ pylonToken, issueId });
+      console.log(
+        `[WAIT_CHECK] issue=${allWaitCandidates.get(issueId)?.number ?? issueId} latestPublic=${msgMeta?.latestPublicMsg?.toISO?.() ?? "null"} speaker=${msgMeta?.latestPublicSpeaker ?? "null"} latestCustomer=${msgMeta?.latestCustomerMsg?.toISO?.() ?? "null"} cutoffP0P1=${waitP0P1CutoffUtc.toISO()} cutoffP2P3=${waitP2P3CutoffUtc.toISO()}`
+      );
+      return msgMeta;
+    });
+
+    for (const [issueId, lastCustMsg] of resolved.entries()) {
       if (lastCustMsg) lastCustomerMsgCache.set(issueId, lastCustMsg);
-      await sleep(200); // rate-limit courtesy
     }
+
     console.log(`[SCAN-B] Resolved ${lastCustomerMsgCache.size}/${allWaitCandidates.size} with customer messages.`);
   }
 
   // Apply time thresholds using actual customer message timestamps
   const waitP0P1Details = new Map();
   for (const [issueId, candidate] of waitP0P1Candidates) {
-    const lastCustMsg = lastCustomerMsgCache.get(issueId);
-    if (lastCustMsg && lastCustMsg < waitP0P1CutoffUtc) {
+    const msgMeta = lastCustomerMsgCache.get(issueId);
+    if (
+      msgMeta?.latestPublicSpeaker === "customer" &&
+      msgMeta?.latestPublicMsg &&
+      msgMeta.latestPublicMsg < waitP0P1CutoffUtc
+    ) {
       ids.waitP0P1.add(issueId);
       waitP0P1Details.set(issueId, candidate);
     }
@@ -903,8 +952,13 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
   const waitP2P3Details = new Map();
   for (const [issueId, candidate] of waitP2P3Candidates) {
-    const lastCustMsg = lastCustomerMsgCache.get(issueId);
-    if (lastCustMsg && lastCustMsg < waitP2P3CutoffUtc) {
+    const msgMeta = lastCustomerMsgCache.get(issueId);
+    console.log(`[WAIT_CHECK] issueId=${issueId} latestPublic=${msgMeta?.latestPublicMsg?.toISO?.() ?? "null"} speaker=${msgMeta?.latestPublicSpeaker ?? "null"} latestCustomer=${msgMeta?.latestCustomerMsg?.toISO?.() ?? "null"}`);
+    if (
+      msgMeta?.latestPublicSpeaker === "customer" &&
+      msgMeta?.latestPublicMsg &&
+      msgMeta.latestPublicMsg < waitP2P3CutoffUtc
+    ) {
       ids.waitP2P3.add(issueId);
       waitP2P3Details.set(issueId, candidate);
     }
