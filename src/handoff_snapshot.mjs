@@ -307,6 +307,70 @@ async function pylonSearch({ token, limit = 200, cursor = null }) {
 }
 
 /**
+ * Fetch messages for a single issue and return the timestamp of the most
+ * recent customer-authored message.
+ *
+ * Customer messages have author.contact populated.
+ * Agent/internal messages have author.user populated.
+ * Private notes are identified via is_private.
+ *
+ * Returns DateTime (UTC) or null if no customer message found.
+ */
+async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
+  const maxAttempts = 4;
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+
+    const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}/messages`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${pylonToken}`,
+        Accept: "application/json",
+      },
+    });
+
+    if (res.status === 429) {
+      if (attempt >= maxAttempts) return null;
+      const retryAfterMs = Math.min(30000, 750 * 2 ** (attempt - 1));
+      await sleep(retryAfterMs);
+      continue;
+    }
+
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      console.warn(`[MESSAGES] Non-JSON response for issue ${issueId}: ${text.slice(0, 200)}`);
+      return null;
+    }
+
+    if (!res.ok) {
+      console.warn(`[MESSAGES] Failed for issue ${issueId} (${res.status})`);
+      return null;
+    }
+
+    const messages = Array.isArray(json.data) ? json.data : [];
+
+    // Find the most recent customer message (author.contact is populated)
+    let latestCustomerMsg = null;
+    for (const msg of messages) {
+      if (!msg?.author?.contact) continue; // skip agent/internal messages
+      if (msg.is_private) continue; // skip private notes
+
+      const msgTime = parseUtcIso(msg.created_at);
+      if (msgTime && (!latestCustomerMsg || msgTime > latestCustomerMsg)) {
+        latestCustomerMsg = msgTime;
+      }
+    }
+
+    return latestCustomerMsg;
+  }
+}
+
+/**
  * Fetch all users:
  * - Build id -> name map (used for display)
  * - Build name -> id map (used for roster matching)
@@ -638,8 +702,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const handoffDisplay = new Map();
   const agedDetails = new Map();
   const p0p1Details = new Map();
-  const waitP0P1Details = new Map();
-  const waitP2P3Details = new Map();
+  const waitP0P1Candidates = new Map(); // resolved after loop via messages API
+  const waitP2P3Candidates = new Map(); // resolved after loop via messages API
 
   let cursor = null;
   const seenCursors = new Set();
@@ -699,36 +763,26 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
-      // Waiting on Support (state=waiting_on_you, updated_at older than threshold)
+      // Waiting on Support candidates (state=waiting_on_you + matching priority).
+      // Time threshold is checked after the loop via per-issue message fetch.
       if (issue.state === "waiting_on_you") {
-        const updatedAtUtc = parseUtcIso(issue.updated_at);
-
-        // P0/P1 waiting > 1 day
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP0P1CutoffUtc) {
-          ids.waitP0P1.add(issue.id);
-          if (!waitP0P1Details.has(issue.id)) {
-            waitP0P1Details.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              assigneeId: issue?.assignee?.id ?? null,
-              subject: issue?.title ?? "(No subject)",
-            });
-          }
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+          waitP0P1Candidates.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: issue?.assignee?.id ?? null,
+            subject: issue?.title ?? "(No subject)",
+          });
         }
-
-        // P2/P3 waiting > 4 days
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP2P3CutoffUtc) {
-          ids.waitP2P3.add(issue.id);
-          if (!waitP2P3Details.has(issue.id)) {
-            waitP2P3Details.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              assigneeId: issue?.assignee?.id ?? null,
-              subject: issue?.title ?? "(No subject)",
-            });
-          }
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+          waitP2P3Candidates.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: issue?.assignee?.id ?? null,
+            subject: issue?.title ?? "(No subject)",
+          });
         }
       }
 
@@ -760,34 +814,34 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} waitP0P1=${ids.waitP0P1.size} waitP2P3=${ids.waitP2P3.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} waitP0P1Candidates=${waitP0P1Candidates.size} waitP2P3Candidates=${waitP2P3Candidates.size}`
     );
 
     if (!hasNext || !nextCursor) break;
 
     // Early stop if we've paged past ALL relevant cutoffs.
-    // We check both created_at and updated_at: issues created long ago may have
-    // been recently updated (e.g. moved to waiting_on_you), so we must keep
-    // paging as long as any issue on the page has a recent enough updated_at.
+    // We check both created_at and latest_message_time: issues created long ago
+    // may have recent customer messages (waiting_on_you), so we must keep paging
+    // as long as any issue on the page has a recent enough latest_message_time.
     const oldestCreatedUtc = data
       .map((i) => parseUtcIso(i.created_at))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
-    const oldestUpdatedUtc = data
-      .map((i) => parseUtcIso(i.updated_at))
+    const oldestLastMsgUtc = data
+      .map((i) => parseUtcIso(i.latest_message_time))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
     // Only stop when the oldest created_at is past the lookback AND the oldest
-    // updated_at is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
-    // This ensures we don't miss old issues that were recently moved to waiting_on_you.
+    // latest_message_time is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
+    // This ensures we don't miss old issues with recent customer messages.
     const createdPastLookback = oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc;
-    const updatedPastAllCutoffs = oldestUpdatedUtc && oldestUpdatedUtc < waitP2P3CutoffUtc;
+    const lastMsgPastAllCutoffs = oldestLastMsgUtc && oldestLastMsgUtc < waitP2P3CutoffUtc;
 
-    if (createdPastLookback && updatedPastAllCutoffs) {
+    if (createdPastLookback && lastMsgPastAllCutoffs) {
       console.log(
-        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestUpdated=${oldestUpdatedUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
+        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestLastMsg=${oldestLastMsgUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
       );
       break;
     }
@@ -821,6 +875,42 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     ids.frP0P1.size > 0
       ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
       : "";
+
+  // Resolve waiting-on-support candidates by fetching messages per issue
+  // to find the actual last customer message timestamp.
+  const allWaitCandidates = new Map([...waitP0P1Candidates, ...waitP2P3Candidates]);
+  const lastCustomerMsgCache = new Map();
+
+  if (allWaitCandidates.size > 0) {
+    console.log(`[SCAN-B] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API...`);
+    for (const issueId of allWaitCandidates.keys()) {
+      const lastCustMsg = await fetchLastCustomerMessageTime({ pylonToken, issueId });
+      if (lastCustMsg) lastCustomerMsgCache.set(issueId, lastCustMsg);
+      await sleep(200); // rate-limit courtesy
+    }
+    console.log(`[SCAN-B] Resolved ${lastCustomerMsgCache.size}/${allWaitCandidates.size} with customer messages.`);
+  }
+
+  // Apply time thresholds using actual customer message timestamps
+  const waitP0P1Details = new Map();
+  for (const [issueId, candidate] of waitP0P1Candidates) {
+    const lastCustMsg = lastCustomerMsgCache.get(issueId);
+    if (lastCustMsg && lastCustMsg < waitP0P1CutoffUtc) {
+      ids.waitP0P1.add(issueId);
+      waitP0P1Details.set(issueId, candidate);
+    }
+  }
+
+  const waitP2P3Details = new Map();
+  for (const [issueId, candidate] of waitP2P3Candidates) {
+    const lastCustMsg = lastCustomerMsgCache.get(issueId);
+    if (lastCustMsg && lastCustMsg < waitP2P3CutoffUtc) {
+      ids.waitP2P3.add(issueId);
+      waitP2P3Details.set(issueId, candidate);
+    }
+  }
+
+  console.log(`[SCAN-B] Waiting on Support final: P0/P1=${ids.waitP0P1.size} P2/P3=${ids.waitP2P3.size}`);
 
   const waitP0P1Lines =
     ids.waitP0P1.size > 0
