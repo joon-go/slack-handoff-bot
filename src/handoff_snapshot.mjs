@@ -699,12 +699,12 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
-      // Waiting on Support (state=waiting_on_you, updated_at older than threshold)
+      // Waiting on Support (state=waiting_on_you, latest_message_time older than threshold)
       if (issue.state === "waiting_on_you") {
-        const updatedAtUtc = parseUtcIso(issue.updated_at);
+        const lastMsgUtc = parseUtcIso(issue.latest_message_time);
 
         // P0/P1 waiting > 1 day
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP0P1CutoffUtc) {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && lastMsgUtc && lastMsgUtc < waitP0P1CutoffUtc) {
           ids.waitP0P1.add(issue.id);
           if (!waitP0P1Details.has(issue.id)) {
             waitP0P1Details.set(issue.id, {
@@ -718,7 +718,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
 
         // P2/P3 waiting > 4 days
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && updatedAtUtc && updatedAtUtc < waitP2P3CutoffUtc) {
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && lastMsgUtc && lastMsgUtc < waitP2P3CutoffUtc) {
           ids.waitP2P3.add(issue.id);
           if (!waitP2P3Details.has(issue.id)) {
             waitP2P3Details.set(issue.id, {
@@ -766,28 +766,28 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     if (!hasNext || !nextCursor) break;
 
     // Early stop if we've paged past ALL relevant cutoffs.
-    // We check both created_at and updated_at: issues created long ago may have
-    // been recently updated (e.g. moved to waiting_on_you), so we must keep
-    // paging as long as any issue on the page has a recent enough updated_at.
+    // We check both created_at and latest_message_time: issues created long ago
+    // may have recent customer messages (waiting_on_you), so we must keep paging
+    // as long as any issue on the page has a recent enough latest_message_time.
     const oldestCreatedUtc = data
       .map((i) => parseUtcIso(i.created_at))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
-    const oldestUpdatedUtc = data
-      .map((i) => parseUtcIso(i.updated_at))
+    const oldestLastMsgUtc = data
+      .map((i) => parseUtcIso(i.latest_message_time))
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
     // Only stop when the oldest created_at is past the lookback AND the oldest
-    // updated_at is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
-    // This ensures we don't miss old issues that were recently moved to waiting_on_you.
+    // latest_message_time is past the most generous waiting-on-support cutoff (P2/P3 = 4 days).
+    // This ensures we don't miss old issues with recent customer messages.
     const createdPastLookback = oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc;
-    const updatedPastAllCutoffs = oldestUpdatedUtc && oldestUpdatedUtc < waitP2P3CutoffUtc;
+    const lastMsgPastAllCutoffs = oldestLastMsgUtc && oldestLastMsgUtc < waitP2P3CutoffUtc;
 
-    if (createdPastLookback && updatedPastAllCutoffs) {
+    if (createdPastLookback && lastMsgPastAllCutoffs) {
       console.log(
-        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestUpdated=${oldestUpdatedUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
+        `[SCAN-B] early-stop: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()} AND oldestLastMsg=${oldestLastMsgUtc.toISO()} < waitCutoff=${waitP2P3CutoffUtc.toISO()}`
       );
       break;
     }
