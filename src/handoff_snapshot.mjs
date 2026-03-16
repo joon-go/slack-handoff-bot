@@ -15,7 +15,10 @@
  *   SLACK_BOT_TOKEN
  *
  * Optional Env:
- *   SCAN_B_LOOKBACK_DAYS=30   # override the SCAN-B lookback window (default 30)
+ *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
+ *   SCAN_B_LOOKBACK_DAYS=30               # override the SCAN-B lookback window (default 30)
+ *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
+ *   PYLON_MESSAGES_DELAY_MS=200           # delay between message API calls (default 200ms)
  *
  * Notes:
  * - Uses Node's built-in fetch (Node 18+). No node-fetch dependency.
@@ -49,8 +52,8 @@ import { DateTime } from "luxon";
 
 const PYLON_API_BASE = "https://api.usepylon.com";
 
-// ✅ Ready for Prod
-const SLACK_CHANNEL = "#csorg-support-handoff";
+// Slack channel: override via env for prod; defaults to test channel for safety
+const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 
 // Team "L1+L2" (enforced locally)
 const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
@@ -311,16 +314,45 @@ async function pylonSearch({ token, limit = 200, cursor = null }) {
 }
 
 /**
- * Fetch messages for a single issue and return the timestamp of the most
- * recent customer-authored message.
- *
- * Customer messages have author.contact populated.
- * Agent/internal messages have author.user populated.
- * Private notes are identified via is_private.
- *
- * Returns DateTime (UTC) or null if no customer message found.
+ * Determine if a message author is a customer.
+ * Pylon is inconsistent — some messages have author.contact populated,
+ * others use author.type === "contact".  Check both to be safe.
  */
-async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
+function isCustomerAuthor(msg) {
+  if (msg?.author?.contact) return true;
+  if (msg?.author?.type === "contact") return true;
+  return false;
+}
+
+/**
+ * Parse the timestamp from a Pylon message.
+ * Some messages use `timestamp`, some use `created_at`.  Try both.
+ */
+function parseMsgTime(msg) {
+  return parseUtcIso(msg?.timestamp || msg?.created_at);
+}
+
+/**
+ * Fetch messages for a single issue and determine whether the issue
+ * should be flagged as "waiting on support".
+ *
+ * Logic (non-negotiable — derived from production debugging):
+ * 1. Fetch all messages for the issue
+ * 2. Filter to PUBLIC messages only (is_private !== true)
+ * 3. Find the latest public message
+ * 4. Only flag the issue if the latest public speaker is a CUSTOMER
+ *    (not support/agent) AND the message is older than the cutoff
+ *
+ * This prevents false positives where support already replied after
+ * the customer's message.
+ *
+ * Customer detection: author.contact populated OR author.type === "contact"
+ * Timestamp detection: msg.timestamp || msg.created_at
+ *
+ * Returns { isCustomerLast: boolean, latestPublicMsgTime: DateTime|null }
+ * Returns null on fetch failure (per-issue error handling — does not crash the run).
+ */
+async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
   const maxAttempts = 4;
   let attempt = 0;
 
@@ -336,7 +368,10 @@ async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
     });
 
     if (res.status === 429) {
-      if (attempt >= maxAttempts) return null;
+      if (attempt >= maxAttempts) {
+        console.warn(`[MESSAGES] 429 after ${maxAttempts} attempts for issue ${issueId}; skipping`);
+        return null;
+      }
       const retryAfterMs = Math.min(30000, 750 * 2 ** (attempt - 1));
       await sleep(retryAfterMs);
       continue;
@@ -358,19 +393,28 @@ async function fetchLastCustomerMessageTime({ pylonToken, issueId }) {
 
     const messages = Array.isArray(json.data) ? json.data : [];
 
-    // Find the most recent customer message (author.contact is populated)
-    let latestCustomerMsg = null;
+    // Find the latest PUBLIC message (ignore private/internal notes)
+    let latestPublicMsg = null;
+    let latestPublicMsgTime = null;
     for (const msg of messages) {
-      if (!msg?.author?.contact) continue; // skip agent/internal messages
       if (msg.is_private) continue; // skip private notes
 
-      const msgTime = parseUtcIso(msg.created_at);
-      if (msgTime && (!latestCustomerMsg || msgTime > latestCustomerMsg)) {
-        latestCustomerMsg = msgTime;
+      const msgTime = parseMsgTime(msg);
+      if (msgTime && (!latestPublicMsgTime || msgTime > latestPublicMsgTime)) {
+        latestPublicMsgTime = msgTime;
+        latestPublicMsg = msg;
       }
     }
 
-    return latestCustomerMsg;
+    // If no public messages at all, we can't determine — skip
+    if (!latestPublicMsg) {
+      return { isCustomerLast: false, latestPublicMsgTime: null };
+    }
+
+    // Check if the latest public speaker is a customer
+    const isCustomerLast = isCustomerAuthor(latestPublicMsg);
+
+    return { isCustomerLast, latestPublicMsgTime };
   }
 }
 
@@ -850,25 +894,39 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     await sleep(200);
   }
 
-  // Resolve waiting-on-support candidates via per-issue messages API
+  // Resolve waiting-on-support candidates via per-issue messages API.
+  // Concurrency=1 is the safe default; configurable via env to avoid 429 storms.
+  const MSG_CONCURRENCY = Number(process.env.PYLON_MESSAGES_CONCURRENCY || 1);
+  const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 200);
   const allWaitCandidates = new Map([...waitP0P1Candidates, ...waitP2P3Candidates]);
-  const lastCustomerMsgCache = new Map();
+
+  // Map issueId -> { isCustomerLast, latestPublicMsgTime } (or null on failure)
+  const waitStatusCache = new Map();
 
   if (allWaitCandidates.size > 0) {
-    console.log(`[SCAN-B] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API...`);
+    console.log(`[SCAN-B] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API (concurrency=${MSG_CONCURRENCY})...`);
+    let resolved = 0;
     for (const issueId of allWaitCandidates.keys()) {
-      const lastCustMsg = await fetchLastCustomerMessageTime({ pylonToken, issueId });
-      if (lastCustMsg) lastCustomerMsgCache.set(issueId, lastCustMsg);
-      await sleep(200);
+      try {
+        const status = await fetchWaitingOnSupportStatus({ pylonToken, issueId });
+        if (status) waitStatusCache.set(issueId, status);
+      } catch (err) {
+        // Per-issue error handling: log and continue, don't abort the run
+        console.warn(`[MESSAGES] Unexpected error for issue ${issueId}: ${err?.message || err}`);
+      }
+      resolved += 1;
+      await sleep(MSG_DELAY_MS);
     }
-    console.log(`[SCAN-B] Resolved ${lastCustomerMsgCache.size}/${allWaitCandidates.size} with customer messages.`);
+    console.log(`[SCAN-B] Resolved ${waitStatusCache.size}/${allWaitCandidates.size} with message status.`);
   }
 
-  // Apply time thresholds
+  // Apply time thresholds — only flag if the latest public speaker is the CUSTOMER
+  // and the message is older than the cutoff.  If support replied after the customer,
+  // the issue is NOT flagged (prevents false positives).
   const waitP0P1Details = new Map();
   for (const [issueId, candidate] of waitP0P1Candidates) {
-    const lastCustMsg = lastCustomerMsgCache.get(issueId);
-    if (lastCustMsg && lastCustMsg < waitP0P1CutoffUtc) {
+    const status = waitStatusCache.get(issueId);
+    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP0P1CutoffUtc) {
       ids.waitP0P1.add(issueId);
       waitP0P1Details.set(issueId, candidate);
     }
@@ -876,8 +934,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
   const waitP2P3Details = new Map();
   for (const [issueId, candidate] of waitP2P3Candidates) {
-    const lastCustMsg = lastCustomerMsgCache.get(issueId);
-    if (lastCustMsg && lastCustMsg < waitP2P3CutoffUtc) {
+    const status = waitStatusCache.get(issueId);
+    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP2P3CutoffUtc) {
       ids.waitP2P3.add(issueId);
       waitP2P3Details.set(issueId, candidate);
     }
