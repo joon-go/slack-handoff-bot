@@ -20,6 +20,9 @@
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
  *   PYLON_MESSAGES_DELAY_MS=200           # delay between message API calls (default 200ms)
  *
+ * Config files:
+ *   config/rosters.json  # shift rosters per region (edit without code changes)
+ *
  * Notes:
  * - Uses Node's built-in fetch (Node 18+). No node-fetch dependency.
  * - Until you explicitly say ready for prod, posts to: #support-automation-test
@@ -45,6 +48,9 @@
  */
 
 import { DateTime } from "luxon";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** ----------------------------
  *  CONFIG
@@ -76,12 +82,33 @@ const SLOT_CONFIG = {
   us: { headerLabel: "US to APAC" },
 };
 
-// Shift rosters for assignment breakdown (names must match Pylon user names)
-const REGION_ROSTERS = {
-  emea: ["Dylan Bonar", "Tommy Lundy", "Robert Norrie"],
+// Shift rosters for assignment breakdown (names must match Pylon user names).
+// Loaded from config/rosters.json if available; falls back to hardcoded defaults.
+const DEFAULT_ROSTERS = {
+  emea: ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
   apac: ["Saurabh Lambe", "Chinmay Koratkar"],
-  us: ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan"],
+  us: ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"],
 };
+
+function loadRosters() {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const configPath = resolve(__dirname, "..", "config", "rosters.json");
+    const raw = readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    console.log(`[CONFIG] Loaded rosters from ${configPath}`);
+    return {
+      emea: Array.isArray(parsed.emea) ? parsed.emea : DEFAULT_ROSTERS.emea,
+      apac: Array.isArray(parsed.apac) ? parsed.apac : DEFAULT_ROSTERS.apac,
+      us: Array.isArray(parsed.us) ? parsed.us : DEFAULT_ROSTERS.us,
+    };
+  } catch (err) {
+    console.warn(`[CONFIG] Could not load config/rosters.json, using defaults: ${err?.message || err}`);
+    return DEFAULT_ROSTERS;
+  }
+}
+
+const REGION_ROSTERS = loadRosters();
 
 // Saved views (Slack hyperlinks)
 const SLACK_LINKS = {
