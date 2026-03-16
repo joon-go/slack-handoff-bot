@@ -386,7 +386,6 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
   while (true) {
     attempt += 1;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}/messages`, {
       method: "GET",
       headers: {
@@ -405,15 +404,21 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
       continue;
     }
 
-      let latestPublicMsg = null;
-      let latestPublicSpeaker = null;
-      let latestCustomerMsg = null;
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      console.warn(`[MESSAGES] Non-JSON response for issue ${issueId}: ${text.slice(0, 200)}`);
+      return null;
+    }
 
-      for (const msg of messages) {
-        if (msg.is_private) continue;
+    if (!res.ok) {
+      console.warn(`[MESSAGES] Failed for issue ${issueId} (${res.status})`);
+      return null;
+    }
 
-        const msgTime = parseUtcIso(msg.timestamp || msg.created_at);
-        if (!msgTime) continue;
+    const messages = Array.isArray(json.data) ? json.data : [];
 
     // Find the latest PUBLIC message (ignore private/internal notes)
     let latestPublicMsg = null;
@@ -426,12 +431,6 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
         latestPublicMsgTime = msgTime;
         latestPublicMsg = msg;
       }
-
-      return {
-        latestPublicMsg,
-        latestPublicSpeaker,
-        latestCustomerMsg,
-      };
     }
 
     // If no public messages at all, we can't determine — skip
@@ -444,29 +443,6 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
 
     return { isCustomerLast, latestPublicMsgTime };
   }
-
-  throw new Error(`Failed to fetch messages for issue ${issueId}: exhausted retries`);
-}
-
-async function mapWithConcurrency(items, limit, worker) {
-  const results = new Map();
-  let index = 0;
-
-  async function runner() {
-    while (true) {
-      const currentIndex = index;
-      index += 1;
-      if (currentIndex >= items.length) return;
-
-      const item = items[currentIndex];
-      const value = await worker(item, currentIndex);
-      results.set(item, value ?? null);
-    }
-  }
-
-  const concurrency = Math.max(1, Math.min(limit, items.length || 1));
-  await Promise.all(Array.from({ length: concurrency }, () => runner()));
-  return results;
 }
 
 /**
