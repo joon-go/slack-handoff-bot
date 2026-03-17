@@ -37,10 +37,10 @@
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
  *     P0/P1 => priority in [urgent, high]
  *     P2/P3 => priority in [medium, low]
- *     Aged > 1 Week (ALL priorities) => created_at < now-7d
+ *     Aged > 5 Days (ALL priorities) => created_at < now-5d
  * - Under FR SLA Pending P0/P1 count line, prints issue line items:
  *     <#1234 link> | Assignee: Name | Subject: Title
- * - Under FR SLA Pending Aged > 1 Week, prints issue line items:
+ * - Under FR SLA Pending Aged > 5 days, prints issue line items:
  *     P0 | <#1234 link> | Assignee: Name | Subject: Title
  * - Handoff issues = OPEN state AND L1+L2 AND hand_off_region.value is set (single-select).
  * - Handoff issues lines:
@@ -635,7 +635,7 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
   }
 
   msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}
-${eAged} FR SLA Pending Aged > 1 Week: ${frAgedAll}`;
+${eAged} FR SLA Pending Aged > 5 days: ${frAgedAll}`;
 
   if (frAgedAll > 0 && agedIssueLines) {
     msg += `\n${agedIssueLines}`;
@@ -745,7 +745,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * Phase 1 (before lookback cutoff):
  * - FR SLA Pending P0/P1 (state=new + urgent/high)
  * - FR SLA Pending P2/P3 (state=new + medium/low)
- * - FR SLA Pending Aged > 1 Week (ALL priorities) (state=new + created_at < now-7d)
+ * - FR SLA Pending Aged > 5 days (ALL priorities) (state=new + created_at < now-5d)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  * - Discord Community Open issues (open + team L1+L2 + discord source or tag)
  * - Waiting-on-support candidates (state=waiting_on_you + matching priority)
@@ -763,7 +763,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  */
 async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
-  const agedCutoffUtc = nowPt.minus({ days: 7 }).toUTC();
+  const agedCutoffUtc = nowPt.minus({ days: 5 }).toUTC();
   const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
   const waitP2P3CutoffUtc = nowPt.minus({ days: 4 }).toUTC();
 
