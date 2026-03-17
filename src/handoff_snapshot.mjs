@@ -288,10 +288,11 @@ function regionLabelFromSlot(slot) {
  *  PYLON API
  *  ---------------------------- */
 
-async function pylonSearch({ token, limit = 200, cursor = null }) {
+async function pylonSearch({ token, limit = 200, cursor = null, filter = null }) {
   const path = "/issues/search";
   const body = { limit };
   if (cursor) body.cursor = cursor;
+  if (filter) body.filter = filter;
 
   const maxAttempts = 8;
   let attempt = 0;
@@ -740,32 +741,20 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 }
 
 /**
- * Pass B: single-pass scan of all issues collecting:
- *
- * Phase 1 (before lookback cutoff):
+ * Pass B: scan recent issues (within lookback window) collecting:
  * - FR SLA Pending P0/P1 (state=new + urgent/high)
  * - FR SLA Pending P2/P3 (state=new + medium/low)
  * - FR SLA Pending Aged > 5 days (ALL priorities) (state=new + created_at < now-5d)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  * - Discord Community Open issues (open + team L1+L2 + discord source or tag)
- * - Waiting-on-support candidates (state=waiting_on_you + matching priority)
  *
- * Phase 2 (after lookback cutoff):
- * - ONLY waiting-on-support candidates (old issues still in waiting_on_you)
- * - Skips FR SLA / Handoff / Discord collection for performance
- *
- * After pagination, resolves waiting-on-support candidates via per-issue
- * messages API to check actual customer wait time.
- *
- * Performance:
- * - FR SLA/Handoff/Discord stop collecting at LOOKBACK_DAYS_SCAN_B (default 30).
- * - Waiting-on-support paginates through ALL issues (Pylon API has no state filter).
+ * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 30).
+ * Waiting-on-support is handled separately by scanWaitingOnSupport()
+ * using server-side state filter for performance.
  */
 async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
   const agedCutoffUtc = nowPt.minus({ days: 5 }).toUTC();
-  const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
-  const waitP2P3CutoffUtc = nowPt.minus({ days: 4 }).toUTC();
 
   const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
   const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
@@ -776,21 +765,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frAgedAll: new Set(),
     handoff: new Set(),
     discordCommunityOpen: new Set(),
-    waitP0P1: new Set(),
-    waitP2P3: new Set(),
   };
 
   const handoffDisplay = new Map();
   const agedDetails = new Map();
   const p0p1Details = new Map();
-  const waitP0P1Candidates = new Map();
-  const waitP2P3Candidates = new Map();
 
   let cursor = null;
   const seenCursors = new Set();
   let page = 0;
-  const MAX_PAGES = 1000;
-  let pastLookback = false; // once true, only collect waiting-on-support
+  const MAX_PAGES = 500;
 
   while (true) {
     page += 1;
@@ -804,81 +788,59 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
+      const createdAtUtc = parseUtcIso(issue.created_at);
 
-      // --- Phase 1 metrics (only before lookback cutoff) ---
-      if (!pastLookback) {
-        const createdAtUtc = parseUtcIso(issue.created_at);
+      // FR SLA Pending buckets (state=new only)
+      if (issue.state === "new") {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
+          ids.frP0P1.add(issue.id);
+          p0p1Details.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: issue?.assignee?.id ?? null,
+            subject: issue?.title ?? "(No subject)",
+          });
+        }
 
-        // FR SLA Pending buckets (state=new only)
-        if (issue.state === "new") {
-          if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
-            ids.frP0P1.add(issue.id);
-            p0p1Details.set(issue.id, {
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw)) {
+          ids.frP2P3.add(issue.id);
+        }
+
+        if (createdAtUtc && createdAtUtc < agedCutoffUtc) {
+          ids.frAgedAll.add(issue.id);
+          if (!agedDetails.has(issue.id)) {
+            agedDetails.set(issue.id, {
               id: issue.id,
               number: issue.number,
               priorityLabel: prioLabel,
               assigneeId: issue?.assignee?.id ?? null,
               subject: issue?.title ?? "(No subject)",
+              createdAtUtc,
             });
           }
-
-          if (prioRaw && P2_P3_PRIORITIES.has(prioRaw)) {
-            ids.frP2P3.add(issue.id);
-          }
-
-          if (createdAtUtc && createdAtUtc < agedCutoffUtc) {
-            ids.frAgedAll.add(issue.id);
-            if (!agedDetails.has(issue.id)) {
-              agedDetails.set(issue.id, {
-                id: issue.id,
-                number: issue.number,
-                priorityLabel: prioLabel,
-                assigneeId: issue?.assignee?.id ?? null,
-                subject: issue?.title ?? "(No subject)",
-                createdAtUtc,
-              });
-            }
-          }
-        }
-
-        // Open handoff issues
-        if (isOpenHandoffIssue(issue)) {
-          ids.handoff.add(issue.id);
-          if (!handoffDisplay.has(issue.id)) {
-            const slug = getHandoffRegionValue(issue);
-            handoffDisplay.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              assigneeId: issue?.assignee?.id ?? null,
-              handoffRegionLabel: handoffLabelFromSlug(slug),
-              meetingRequired: isMeetingRequired(issue),
-            });
-          }
-        }
-
-        // Discord Community Open Issues
-        if (isOpenState(issue) && isDiscordIssue(issue)) {
-          ids.discordCommunityOpen.add(issue.id);
         }
       }
 
-      // --- Waiting-on-support candidates (collected in BOTH phases) ---
-      if (issue.state === "waiting_on_you") {
-        const candidate = {
-          id: issue.id,
-          number: issue.number,
-          priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
-          subject: issue?.title ?? "(No subject)",
-        };
+      // Open handoff issues
+      if (isOpenHandoffIssue(issue)) {
+        ids.handoff.add(issue.id);
+        if (!handoffDisplay.has(issue.id)) {
+          const slug = getHandoffRegionValue(issue);
+          handoffDisplay.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: issue?.assignee?.id ?? null,
+            handoffRegionLabel: handoffLabelFromSlug(slug),
+            meetingRequired: isMeetingRequired(issue),
+          });
+        }
+      }
 
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
-          waitP0P1Candidates.set(issue.id, candidate);
-        }
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
-          waitP2P3Candidates.set(issue.id, candidate);
-        }
+      // Discord Community Open Issues
+      if (isOpenState(issue) && isDiscordIssue(issue)) {
+        ids.discordCommunityOpen.add(issue.id);
       }
     }
 
@@ -886,24 +848,22 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} phase=${pastLookback ? 2 : 1} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} waitCandidates=${waitP0P1Candidates.size + waitP2P3Candidates.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size}`
     );
 
     if (!hasNext || !nextCursor) break;
 
-    // Check lookback cutoff — switch to phase 2 (waiting-on-support only)
-    if (!pastLookback) {
-      const oldestCreatedUtc = data
-        .map((i) => parseUtcIso(i.created_at))
-        .filter(Boolean)
-        .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
+    // Early-stop at lookback cutoff
+    const oldestCreatedUtc = data
+      .map((i) => parseUtcIso(i.created_at))
+      .filter(Boolean)
+      .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
-      if (oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc) {
-        console.log(
-          `[SCAN-B] phase 1 done: oldestCreated=${oldestCreatedUtc.toISO()} < lookback=${lookbackCutoffUtc.toISO()}; continuing phase 2 for waiting-on-support`
-        );
-        pastLookback = true;
-      }
+    if (oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc) {
+      console.log(
+        `[SCAN-B] Reached lookback cutoff (${lookbackCutoffUtc.toISO()}); stopping pagination.`
+      );
+      break;
     }
 
     if (seenCursors.has(nextCursor)) {
@@ -921,18 +881,125 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     await sleep(200);
   }
 
+  const handoffIssueLines =
+    ids.handoff.size > 0
+      ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
+      : "";
+
+  const agedIssueLines =
+    ids.frAgedAll.size > 0
+      ? buildAgedIssueLines(Array.from(agedDetails.values()), assigneeIdToName)
+      : "";
+
+  const p0p1IssueLines =
+    ids.frP0P1.size > 0
+      ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
+      : "";
+
+  return {
+    frP0P1: ids.frP0P1.size,
+    frP2P3: ids.frP2P3.size,
+    frAgedAll: ids.frAgedAll.size,
+    p0p1IssueLines,
+    agedIssueLines,
+    discordCommunityOpen: ids.discordCommunityOpen.size,
+    handoffIssues: ids.handoff.size,
+    handoffIssueLines,
+    lookbackDays: LOOKBACK_DAYS_SCAN_B,
+  };
+}
+
+/**
+ * Pass C: Scan waiting-on-support issues using server-side state filter.
+ *
+ * Uses Pylon API filter: { field: "state", operator: "equals", value: "waiting_on_you" }
+ * This returns ONLY issues in waiting_on_you state, avoiding full pagination
+ * through all 13,000+ issues.
+ *
+ * Team L1+L2 is filtered locally (compound filters not supported by Pylon API).
+ *
+ * After collecting candidates, resolves each via the per-issue messages API
+ * to check who spoke last (latest-public-speaker check).
+ *
+ * Time thresholds:
+ *   P0/P1 (urgent/high): customer last spoke > 1 day ago
+ *   P2/P3 (medium/low):  customer last spoke > 4 days ago
+ */
+async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
+  const nowPt = ptNow();
+  const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
+  const waitP2P3CutoffUtc = nowPt.minus({ days: 4 }).toUTC();
+
+  const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
+
+  const waitP0P1Candidates = new Map();
+  const waitP2P3Candidates = new Map();
+
+  let cursor = null;
+  const seenCursors = new Set();
+  let page = 0;
+  const MAX_PAGES = 200;
+
+  while (true) {
+    page += 1;
+
+    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, filter: WAITING_FILTER });
+    const data = Array.isArray(resp.data) ? resp.data : [];
+
+    for (const issue of data) {
+      if (!issue?.id) continue;
+      if (!isTeamL1L2(issue)) continue;
+
+      const prioRaw = getPriority(issue);
+      const prioLabel = mapPriorityLabel(prioRaw);
+
+      const candidate = {
+        id: issue.id,
+        number: issue.number,
+        priorityLabel: prioLabel,
+        assigneeId: issue?.assignee?.id ?? null,
+        subject: issue?.title ?? "(No subject)",
+      };
+
+      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+        waitP0P1Candidates.set(issue.id, candidate);
+      }
+      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+        waitP2P3Candidates.set(issue.id, candidate);
+      }
+    }
+
+    const hasNext = resp?.pagination?.has_next_page === true;
+    const nextCursor = resp?.pagination?.cursor ?? null;
+
+    console.log(
+      `[SCAN-C] page=${page} fetched=${data.length} waitP0P1=${waitP0P1Candidates.size} waitP2P3=${waitP2P3Candidates.size}`
+    );
+
+    if (!hasNext || !nextCursor) break;
+
+    if (seenCursors.has(nextCursor)) {
+      console.warn(`[SCAN-C] cursor repeated; stopping.`);
+      break;
+    }
+    seenCursors.add(nextCursor);
+
+    if (page >= MAX_PAGES) {
+      console.warn(`[SCAN-C] hit MAX_PAGES=${MAX_PAGES}; stopping.`);
+      break;
+    }
+
+    cursor = nextCursor;
+    await sleep(200);
+  }
+
   // Resolve waiting-on-support candidates via per-issue messages API.
-  // Concurrency=1 is the safe default; configurable via env to avoid 429 storms.
-  const MSG_CONCURRENCY = Number(process.env.PYLON_MESSAGES_CONCURRENCY || 1);
   const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 200);
   const allWaitCandidates = new Map([...waitP0P1Candidates, ...waitP2P3Candidates]);
-
-  // Map issueId -> { isCustomerLast, latestPublicMsgTime } (or null on failure)
   const waitStatusCache = new Map();
 
   if (allWaitCandidates.size > 0) {
-    console.log(`[SCAN-B] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API (concurrency=${MSG_CONCURRENCY})...`);
-    let resolved = 0;
+    console.log(`[SCAN-C] Resolving ${allWaitCandidates.size} waiting-on-support candidates via messages API...`);
     for (const issueId of allWaitCandidates.keys()) {
       try {
         const status = await fetchWaitingOnSupportStatus({ pylonToken, issueId });
@@ -941,15 +1008,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         // Per-issue error handling: log and continue, don't abort the run
         console.warn(`[MESSAGES] Unexpected error for issue ${issueId}: ${err?.message || err}`);
       }
-      resolved += 1;
       await sleep(MSG_DELAY_MS);
     }
-    console.log(`[SCAN-B] Resolved ${waitStatusCache.size}/${allWaitCandidates.size} with message status.`);
+    console.log(`[SCAN-C] Resolved ${waitStatusCache.size}/${allWaitCandidates.size} with message status.`);
   }
 
   // Apply time thresholds — only flag if the latest public speaker is the CUSTOMER
-  // and the message is older than the cutoff.  If support replied after the customer,
-  // the issue is NOT flagged (prevents false positives).
+  // and the message is older than the cutoff.
+  const ids = { waitP0P1: new Set(), waitP2P3: new Set() };
+
   const waitP0P1Details = new Map();
   for (const [issueId, candidate] of waitP0P1Candidates) {
     const status = waitStatusCache.get(issueId);
@@ -968,22 +1035,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     }
   }
 
-  console.log(`[SCAN-B] Waiting on Support final: P0/P1=${ids.waitP0P1.size} P2/P3=${ids.waitP2P3.size}`);
-
-  const handoffIssueLines =
-    ids.handoff.size > 0
-      ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
-      : "";
-
-  const agedIssueLines =
-    ids.frAgedAll.size > 0
-      ? buildAgedIssueLines(Array.from(agedDetails.values()), assigneeIdToName)
-      : "";
-
-  const p0p1IssueLines =
-    ids.frP0P1.size > 0
-      ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
-      : "";
+  console.log(`[SCAN-C] Waiting on Support final: P0/P1=${ids.waitP0P1.size} P2/P3=${ids.waitP2P3.size}`);
 
   const waitP0P1Lines =
     ids.waitP0P1.size > 0
@@ -996,19 +1048,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
       : "";
 
   return {
-    frP0P1: ids.frP0P1.size,
-    frP2P3: ids.frP2P3.size,
-    frAgedAll: ids.frAgedAll.size,
-    p0p1IssueLines,
-    agedIssueLines,
-    discordCommunityOpen: ids.discordCommunityOpen.size,
     waitP0P1: ids.waitP0P1.size,
     waitP0P1Lines,
     waitP2P3: ids.waitP2P3.size,
     waitP2P3Lines,
-    handoffIssues: ids.handoff.size,
-    handoffIssueLines,
-    lookbackDays: LOOKBACK_DAYS_SCAN_B,
   };
 }
 
@@ -1062,8 +1105,11 @@ async function main() {
     assigneeIdToName
   );
 
-  // Pass B: queue metrics + open handoff + waiting-on-support (two-phase scan)
+  // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
+
+  // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
+  const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
 
   const slackText = buildSlackHandoffMessage({
     slot,
@@ -1078,10 +1124,10 @@ async function main() {
     frAgedAll: metrics.frAgedAll,
     p0p1IssueLines: metrics.p0p1IssueLines,
     agedIssueLines: metrics.agedIssueLines,
-    waitP0P1: metrics.waitP0P1,
-    waitP0P1Lines: metrics.waitP0P1Lines,
-    waitP2P3: metrics.waitP2P3,
-    waitP2P3Lines: metrics.waitP2P3Lines,
+    waitP0P1: waiting.waitP0P1,
+    waitP0P1Lines: waiting.waitP0P1Lines,
+    waitP2P3: waiting.waitP2P3,
+    waitP2P3Lines: waiting.waitP2P3Lines,
     handoffIssues: metrics.handoffIssues,
     handoffIssueLines: metrics.handoffIssueLines,
   });
@@ -1099,8 +1145,8 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
-    waitP0P1: metrics.waitP0P1,
-    waitP2P3: metrics.waitP2P3,
+    waitP0P1: waiting.waitP0P1,
+    waitP2P3: waiting.waitP2P3,
     handoffIssues: metrics.handoffIssues,
     scanBLookbackDays: metrics.lookbackDays,
     enforcedTeamId: TEAM_ID_L1_L2,
