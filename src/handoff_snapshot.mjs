@@ -37,7 +37,7 @@
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
  *     P0/P1 => priority in [urgent, high]
  *     P2/P3 => priority in [medium, low]
- *     Aged > 1 Week (ALL priorities) => created_at < now-7d
+ *     Aged > 5 Days (ALL priorities) => created_at < now-5d
  * - Under FR SLA Pending P0/P1 count line, prints issue line items:
  *     <#1234 link> | Assignee: Name | Subject: Title
  * - Under FR SLA Pending Aged > 5 days, prints issue line items:
@@ -745,7 +745,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * Phase 1 (before lookback cutoff):
  * - FR SLA Pending P0/P1 (state=new + urgent/high)
  * - FR SLA Pending P2/P3 (state=new + medium/low)
- * - FR SLA Pending Aged > 5 days (ALL priorities) (state=new + created_at < now-7d)
+ * - FR SLA Pending Aged > 5 days (ALL priorities) (state=new + created_at < now-5d)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  * - Discord Community Open issues (open + team L1+L2 + discord source or tag)
  * - Waiting-on-support candidates (state=waiting_on_you + matching priority)
