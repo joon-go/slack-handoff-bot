@@ -561,6 +561,17 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
   const pylonCounts = new Map(roster.map((n) => [n, 0]));
   const discordCounts = new Map(roster.map((n) => [n, 0]));
 
+  // Warn if any roster member's name doesn't match any Pylon user — counts for
+  // that person will silently be 0, which would make the handoff report wrong.
+  const knownNames = new Set(Object.values(assigneeIdToName));
+  const unresolved = roster.filter((n) => !knownNames.has(n));
+  if (unresolved.length > 0) {
+    console.warn(
+      `[WARN][${slot.toUpperCase()}] Roster members not found in Pylon users (counts will be 0): ${unresolved.join(", ")}. ` +
+      `Check config/rosters.json for typos or name changes.`
+    );
+  }
+
   for (const issue of createdIssues) {
     const assigneeId = issue?.assignee?.id;
     if (!assigneeId) continue;
@@ -578,9 +589,14 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
   const pylonLine = roster.map((n) => `${n}: ${pylonCounts.get(n) || 0}`).join(" | ");
   const discordLine = roster.map((n) => `${n}: ${discordCounts.get(n) || 0}`).join(" | ");
 
+  const assignedCount = [...pylonCounts.values(), ...discordCounts.values()].reduce((s, v) => s + v, 0);
+  const discordNew = [...discordCounts.values()].reduce((s, v) => s + v, 0);
+
   return {
     pylon: pylonLine,
     discord: discordLine,
+    assignedCount,
+    discordNew,
   };
 }
 
@@ -595,7 +611,9 @@ function buildSlackHandoffMessage({
   newTicketsDuringShiftCount,
   newTicketsAssignedPylonBreakdown,
   newTicketsAssignedDiscordBreakdown,
-  discordCommunityOpen,
+  discordNew,
+  discordOpen,
+  discordClosed,
   frP0P1,
   frP2P3,
   frAgedAll,
@@ -628,7 +646,7 @@ Date: ${datePt}
 (New tickets during ${region}: ${newTicketsDuringShiftCount})
 Assigned (Pylon): ${newTicketsAssignedPylonBreakdown}
 Assigned (Discord): ${newTicketsAssignedDiscordBreakdown}
-🎫 ${discordCommunityLabel}: ${discordCommunityOpen}
+🎫 ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
 ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   if (frP0P1 > 0 && p0p1IssueLines) {
@@ -764,7 +782,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frP2P3: new Set(),
     frAgedAll: new Set(),
     handoff: new Set(),
-    discordCommunityOpen: new Set(),
+    discordOpen: new Set(),
+    discordClosed: new Set(),
   };
 
   const handoffDisplay = new Map();
@@ -838,9 +857,13 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
-      // Discord Community Open Issues
-      if (isOpenState(issue) && isDiscordIssue(issue)) {
-        ids.discordCommunityOpen.add(issue.id);
+      // Discord Community Issues (split by state)
+      if (isDiscordIssue(issue)) {
+        if (isOpenState(issue) && issue.state !== "new") {
+          ids.discordOpen.add(issue.id);
+        } else if (!isOpenState(issue)) {
+          ids.discordClosed.add(issue.id);
+        }
       }
     }
 
@@ -902,7 +925,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frAgedAll: ids.frAgedAll.size,
     p0p1IssueLines,
     agedIssueLines,
-    discordCommunityOpen: ids.discordCommunityOpen.size,
+    discordOpen: ids.discordOpen.size,
+    discordClosed: ids.discordClosed.size,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -1093,17 +1117,22 @@ async function main() {
   const datePt = formatDatePt(ptNow());
 
   const { assigneeIdToName } = await fetchAssigneeMaps({ pylonToken });
+  if (Object.keys(assigneeIdToName).length === 0) {
+    throw new Error(
+      "[FATAL] fetchAssigneeMaps returned an empty map. " +
+      "Aborting to avoid posting misleading zeros for new tickets during shift."
+    );
+  }
 
   // Pass A: created during shift (can early-stop safely)
   const created = await scanCreatedDuringShift({ slot, pylonToken });
-  const newTicketsDuringShiftCount = created.count;
-
   // Assigned breakdown for the roster (split by source)
   const assignedBreakdown = formatAssignedBreakdownForShift(
     slot,
     created.issues,
     assigneeIdToName
   );
+  const newTicketsDuringShiftCount = assignedBreakdown.assignedCount;
 
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
@@ -1118,7 +1147,9 @@ async function main() {
     newTicketsDuringShiftCount,
     newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
     newTicketsAssignedDiscordBreakdown: assignedBreakdown.discord,
-    discordCommunityOpen: metrics.discordCommunityOpen,
+    discordNew: assignedBreakdown.discordNew,
+    discordOpen: metrics.discordOpen,
+    discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
@@ -1141,7 +1172,9 @@ async function main() {
     newTicketsDuringShiftCount,
     assignedPylon: assignedBreakdown.pylon,
     assignedDiscord: assignedBreakdown.discord,
-    discordCommunityOpen: metrics.discordCommunityOpen,
+    discordNew: assignedBreakdown.discordNew,
+    discordOpen: metrics.discordOpen,
+    discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
