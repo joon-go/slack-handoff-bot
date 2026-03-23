@@ -578,9 +578,12 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
   const pylonLine = roster.map((n) => `${n}: ${pylonCounts.get(n) || 0}`).join(" | ");
   const discordLine = roster.map((n) => `${n}: ${discordCounts.get(n) || 0}`).join(" | ");
 
+  const assignedCount = [...pylonCounts.values(), ...discordCounts.values()].reduce((s, v) => s + v, 0);
+
   return {
     pylon: pylonLine,
     discord: discordLine,
+    assignedCount,
   };
 }
 
@@ -1096,14 +1099,13 @@ async function main() {
 
   // Pass A: created during shift (can early-stop safely)
   const created = await scanCreatedDuringShift({ slot, pylonToken });
-  const newTicketsDuringShiftCount = created.count;
-
   // Assigned breakdown for the roster (split by source)
   const assignedBreakdown = formatAssignedBreakdownForShift(
     slot,
     created.issues,
     assigneeIdToName
   );
+  const newTicketsDuringShiftCount = assignedBreakdown.assignedCount;
 
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
