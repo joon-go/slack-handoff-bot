@@ -1117,6 +1117,12 @@ async function main() {
   const datePt = formatDatePt(ptNow());
 
   const { assigneeIdToName } = await fetchAssigneeMaps({ pylonToken });
+  if (Object.keys(assigneeIdToName).length === 0) {
+    throw new Error(
+      "[FATAL] fetchAssigneeMaps returned an empty map. " +
+      "Aborting to avoid posting misleading zeros for new tickets during shift."
+    );
+  }
 
   // Pass A: created during shift (can early-stop safely)
   const created = await scanCreatedDuringShift({ slot, pylonToken });
