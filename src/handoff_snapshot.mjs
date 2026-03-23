@@ -561,6 +561,17 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
   const pylonCounts = new Map(roster.map((n) => [n, 0]));
   const discordCounts = new Map(roster.map((n) => [n, 0]));
 
+  // Warn if any roster member's name doesn't match any Pylon user — counts for
+  // that person will silently be 0, which would make the handoff report wrong.
+  const knownNames = new Set(Object.values(assigneeIdToName));
+  const unresolved = roster.filter((n) => !knownNames.has(n));
+  if (unresolved.length > 0) {
+    console.warn(
+      `[WARN][${slot.toUpperCase()}] Roster members not found in Pylon users (counts will be 0): ${unresolved.join(", ")}. ` +
+      `Check config/rosters.json for typos or name changes.`
+    );
+  }
+
   for (const issue of createdIssues) {
     const assigneeId = issue?.assignee?.id;
     if (!assigneeId) continue;
