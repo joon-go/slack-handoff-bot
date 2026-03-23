@@ -579,11 +579,13 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
   const discordLine = roster.map((n) => `${n}: ${discordCounts.get(n) || 0}`).join(" | ");
 
   const assignedCount = [...pylonCounts.values(), ...discordCounts.values()].reduce((s, v) => s + v, 0);
+  const discordNew = [...discordCounts.values()].reduce((s, v) => s + v, 0);
 
   return {
     pylon: pylonLine,
     discord: discordLine,
     assignedCount,
+    discordNew,
   };
 }
 
@@ -598,7 +600,9 @@ function buildSlackHandoffMessage({
   newTicketsDuringShiftCount,
   newTicketsAssignedPylonBreakdown,
   newTicketsAssignedDiscordBreakdown,
-  discordCommunityOpen,
+  discordNew,
+  discordOpen,
+  discordClosed,
   frP0P1,
   frP2P3,
   frAgedAll,
@@ -631,7 +635,7 @@ Date: ${datePt}
 (New tickets during ${region}: ${newTicketsDuringShiftCount})
 Assigned (Pylon): ${newTicketsAssignedPylonBreakdown}
 Assigned (Discord): ${newTicketsAssignedDiscordBreakdown}
-🎫 ${discordCommunityLabel}: ${discordCommunityOpen}
+🎫 ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
 ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   if (frP0P1 > 0 && p0p1IssueLines) {
@@ -767,7 +771,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frP2P3: new Set(),
     frAgedAll: new Set(),
     handoff: new Set(),
-    discordCommunityOpen: new Set(),
+    discordOpen: new Set(),
+    discordClosed: new Set(),
   };
 
   const handoffDisplay = new Map();
@@ -841,9 +846,13 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
-      // Discord Community Open Issues
-      if (isOpenState(issue) && isDiscordIssue(issue)) {
-        ids.discordCommunityOpen.add(issue.id);
+      // Discord Community Issues (split by state)
+      if (isDiscordIssue(issue)) {
+        if (isOpenState(issue) && issue.state !== "new") {
+          ids.discordOpen.add(issue.id);
+        } else if (!isOpenState(issue)) {
+          ids.discordClosed.add(issue.id);
+        }
       }
     }
 
@@ -905,7 +914,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frAgedAll: ids.frAgedAll.size,
     p0p1IssueLines,
     agedIssueLines,
-    discordCommunityOpen: ids.discordCommunityOpen.size,
+    discordOpen: ids.discordOpen.size,
+    discordClosed: ids.discordClosed.size,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -1120,7 +1130,9 @@ async function main() {
     newTicketsDuringShiftCount,
     newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
     newTicketsAssignedDiscordBreakdown: assignedBreakdown.discord,
-    discordCommunityOpen: metrics.discordCommunityOpen,
+    discordNew: assignedBreakdown.discordNew,
+    discordOpen: metrics.discordOpen,
+    discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
@@ -1143,7 +1155,9 @@ async function main() {
     newTicketsDuringShiftCount,
     assignedPylon: assignedBreakdown.pylon,
     assignedDiscord: assignedBreakdown.discord,
-    discordCommunityOpen: metrics.discordCommunityOpen,
+    discordNew: assignedBreakdown.discordNew,
+    discordOpen: metrics.discordOpen,
+    discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
