@@ -615,7 +615,7 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
       const tierSlug = it.tier ?? "unknown";
       const tier = tierDisplayName(tierSlug);
       const timeLeft = formatTimeRemaining(it.timeRemainingSeconds, it.isCalendar);
-      const suffix = isEnterpriseTier(tierSlug) ? " 🔴" : "";
+      const suffix = isEnterpriseTier(tierSlug) ? " 📌" : "";
       return `${it.priorityLabel} | ${tier} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}${suffix}`;
     })
     .join("\n");
@@ -632,7 +632,7 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
       const tierSlug = it.tier ?? "unknown";
       const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, true);
-      const suffix = isEnterpriseTier(tierSlug) ? " 🔴" : "";
+      const suffix = isEnterpriseTier(tierSlug) ? " 📌" : "";
       return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}${suffix}`;
     })
     .join("\n");
@@ -727,7 +727,7 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
       const tierSlug = it.tier ?? "unknown";
       const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, it.isCalendar);
-      const suffix = isEnterpriseTier(tierSlug) ? " 🔴" : "";
+      const suffix = isEnterpriseTier(tierSlug) ? " 📌" : "";
       return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}${suffix}`;
     })
     .join("\n");
