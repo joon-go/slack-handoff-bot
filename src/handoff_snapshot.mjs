@@ -757,13 +757,13 @@ ${eAged} FR SLA Pending Aged > 5 days: ${frAgedAll}`;
     msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP0P1} P0/P1 Waiting on Support (SLA overdue): ${waitP0P1}`;
+  msg += `\n${eWaitP0P1} P0/P1 Waiting on Support > 1 day: ${waitP0P1}`;
 
   if (waitP0P1 > 0 && waitP0P1Lines) {
     msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eWaitP2P3} P2/P3 Waiting on Support (SLA overdue): ${waitP2P3}`;
+  msg += `\n${eWaitP2P3} P2/P3 Waiting on Support > 3 days: ${waitP2P3}`;
 
   if (waitP2P3 > 0 && waitP2P3Lines) {
     msg += `\n${waitP2P3Lines}`;
@@ -1076,13 +1076,14 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
  * After collecting candidates, resolves each via the per-issue messages API
  * to check who spoke last (latest-public-speaker check).
  *
- * Time thresholds: tier × priority SLA matrix (SLA_SECONDS / SLA_IS_CALENDAR).
- * Elapsed time is measured from the customer's last public message to now.
- * Business hours (M-F 09:00-17:00 PT) for Lite Legacy / Pro;
- * calendar hours for Enterprise P0/P1 and best-effort tiers (Community, Unknown).
+ * Update-frequency thresholds (best effort until per-tier values are defined):
+ *   P0/P1 (urgent/high): customer last spoke > 1 day ago
+ *   P2/P3 (medium/low):  customer last spoke > 3 days ago
  */
 async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
+  const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
+  const waitP2P3CutoffUtc = nowPt.minus({ days: 3 }).toUTC();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
 
@@ -1170,27 +1171,14 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     console.log(`[SCAN-C] Resolved ${waitStatusCache.size}/${allWaitCandidates.size} with message status.`);
   }
 
-  // Apply tier × priority SLA thresholds — only flag if the latest public speaker
-  // is the CUSTOMER and the elapsed time since their message exceeds the SLA.
-  // Business hours (M-F 09:00-17:00 PT) or calendar hours depending on tier/priority.
+  // Apply update-frequency thresholds — only flag if the latest public speaker is
+  // the CUSTOMER and their message is older than the cutoff.
   const ids = { waitP0P1: new Set(), waitP2P3: new Set() };
-
-  function waitSlaBreached(candidate, status) {
-    if (!status?.isCustomerLast || !status.latestPublicMsgTime) return false;
-    const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? null;
-    const slaSeconds = prioIdx !== null ? (SLA_SECONDS[candidate.tier]?.[prioIdx] ?? null) : null;
-    if (slaSeconds === null) return false;
-    const isCalendar = SLA_IS_CALENDAR[candidate.tier]?.[prioIdx] ?? false;
-    const elapsed = isCalendar
-      ? (nowPt.toMillis() - status.latestPublicMsgTime.toMillis()) / 1000
-      : businessHoursElapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt);
-    return elapsed > slaSeconds;
-  }
 
   const waitP0P1Details = new Map();
   for (const [issueId, candidate] of waitP0P1Candidates) {
     const status = waitStatusCache.get(issueId);
-    if (waitSlaBreached(candidate, status)) {
+    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP0P1CutoffUtc) {
       ids.waitP0P1.add(issueId);
       waitP0P1Details.set(issueId, candidate);
     }
@@ -1199,7 +1187,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const waitP2P3Details = new Map();
   for (const [issueId, candidate] of waitP2P3Candidates) {
     const status = waitStatusCache.get(issueId);
-    if (waitSlaBreached(candidate, status)) {
+    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP2P3CutoffUtc) {
       ids.waitP2P3.add(issueId);
       waitP2P3Details.set(issueId, candidate);
     }
