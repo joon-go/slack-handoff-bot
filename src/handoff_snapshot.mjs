@@ -562,6 +562,10 @@ function buildHandoffIssueLines(handoffIssuesList, assigneeIdToName) {
     .join("\n");
 }
 
+function isEnterpriseTier(tierSlug) {
+  return tierSlug === "enterprise" || tierSlug === "enterprise_elite";
+}
+
 function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
   return p0p1List
     .map((it) => {
@@ -569,7 +573,11 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      return `${it.priorityLabel} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
+      const timeLeft = formatTimeRemaining(it.timeRemainingSeconds, it.isCalendar);
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -582,9 +590,11 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      const tier = tierDisplayName(it.tier ?? "unknown");
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, true);
-      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -633,6 +643,40 @@ function formatOverdue(overdueSeconds, isCalendar) {
   }
 }
 
+/**
+ * Format time remaining until FRT SLA.
+ * Positive seconds → "3h 20m left" / "2 biz hrs left"
+ * Zero/negative    → "overdue"
+ */
+function formatTimeRemaining(seconds, isCalendar) {
+  if (seconds === null || seconds === undefined) return "SLA N/A";
+  if (seconds <= 0) return "overdue";
+  if (seconds < 60) return "<1m left";
+  const totalHours = Math.floor(seconds / 3600);
+  const remMins = Math.floor((seconds % 3600) / 60);
+  if (isCalendar) {
+    const days = Math.floor(totalHours / 24);
+    const hrs = totalHours % 24;
+    if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
+    if (days > 0)              return `${days}d left`;
+    if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
+    if (totalHours > 0)        return `${totalHours}h left`;
+    return `${remMins}m left`;
+  } else {
+    const bizDays = Math.floor(totalHours / 8);
+    const bizHrs = totalHours % 8;
+    if (bizDays > 0 && bizHrs > 0)
+      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} ${bizHrs} biz hr${bizHrs !== 1 ? "s" : ""} left`;
+    if (bizDays > 0)
+      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} left`;
+    if (totalHours > 0 && remMins > 0)
+      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} ${remMins}m left`;
+    if (totalHours > 0)
+      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} left`;
+    return `${remMins}m left`;
+  }
+}
+
 function buildSlaBreachedLines(list, assigneeIdToName) {
   const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
   return sorted
@@ -641,9 +685,11 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      const tier = tierDisplayName(it.tier);
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, it.isCalendar);
-      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -729,8 +775,8 @@ function buildSlackHandoffMessage({
   const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
   const eHandoff = statusEmoji({ count: handoffIssues });
 
-  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|P0/P1 Pylon Queue>`;
-  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|P2/P3 Pylon Queue>`;
+  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
+  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
   const handoffLabel = `<${SLACK_LINKS.handoffIssues}|Handoff Issues>`;
   const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|Discord Community Issues>`;
 
@@ -751,19 +797,19 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
-  msg += `\n${eSlaBreached} FR SLA Breached by Tier: ${slaBreached}`;
+  msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
 
   if (slaBreached > 0 && slaBreachedLines) {
     msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP0P1} P0/P1 Update SLA Breached (>1 day): ${waitP0P1}`;
+  msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
 
   if (waitP0P1 > 0 && waitP0P1Lines) {
     msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eWaitP2P3} P2/P3 Update SLA Breached (>3 days): ${waitP2P3}`;
+  msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
 
   if (waitP2P3 > 0 && waitP2P3Lines) {
     msg += `\n${waitP2P3Lines}`;
@@ -906,12 +952,29 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
       // FR SLA Pending buckets (state=new only)
       if (issue.state === "new") {
+        const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
+        const tier = tierRaw.replace(/-/g, "_");
+
         if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
           ids.frP0P1.add(issue.id);
+          // Compute time remaining until FRT SLA for display
+          const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
+          const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
+          const p0p1IsCalendar = p0p1SlaSeconds !== null ? (SLA_IS_CALENDAR[tier]?.[p0p1PrioIdx] ?? false) : false;
+          let p0p1TimeRemaining = null;
+          if (p0p1SlaSeconds !== null && issue.created_at) {
+            const p0p1Elapsed = p0p1IsCalendar
+              ? nowPt.diff(DateTime.fromISO(issue.created_at), "seconds").seconds
+              : businessHoursElapsedSeconds(issue.created_at, nowPt);
+            p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
+          }
           p0p1Details.set(issue.id, {
             id: issue.id,
             number: issue.number,
             priorityLabel: prioLabel,
+            tier,
+            timeRemainingSeconds: p0p1TimeRemaining,
+            isCalendar: p0p1IsCalendar,
             assigneeId: issue?.assignee?.id ?? null,
             subject: issue?.title ?? "(No subject)",
           });
@@ -923,8 +986,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
         // FRT SLA breach: check tier × priority threshold
         if (prioRaw && issue.created_at) {
-          const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
-          const tier = tierRaw.replace(/-/g, "_");
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
           if (slaSeconds !== null) {
