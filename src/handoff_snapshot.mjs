@@ -626,6 +626,31 @@ function tierDisplayName(slug) {
   }
 }
 
+/**
+ * Format the overdue duration for display.
+ * Calendar: "+2d 3h overdue" or "+5h overdue"
+ * Business hours: "+1 biz day 3 biz hrs overdue" or "+5 biz hrs overdue"
+ *   (1 biz day = 8 biz hrs)
+ */
+function formatOverdue(overdueSeconds, isCalendar) {
+  const totalHours = Math.floor(overdueSeconds / 3600);
+  if (isCalendar) {
+    const days = Math.floor(totalHours / 24);
+    const remHours = totalHours % 24;
+    if (days > 0 && remHours > 0) return `+${days}d ${remHours}h overdue`;
+    if (days > 0)                  return `+${days}d overdue`;
+    return `+${totalHours}h overdue`;
+  } else {
+    const bizDays = Math.floor(totalHours / 8);
+    const remBizHours = totalHours % 8;
+    if (bizDays > 0 && remBizHours > 0)
+      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} ${remBizHours} biz hrs overdue`;
+    if (bizDays > 0)
+      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} overdue`;
+    return `+${totalHours} biz hr${totalHours !== 1 ? "s" : ""} overdue`;
+  }
+}
+
 function buildSlaBreachedLines(list, assigneeIdToName) {
   const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
   return sorted
@@ -635,7 +660,8 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
       const tier = tierDisplayName(it.tier);
-      return `${it.priorityLabel} | ${tier} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const overdue = formatOverdue(it.overdueSeconds, it.isCalendar);
+      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -957,6 +983,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
                 number: issue.number,
                 priorityLabel: prioLabel,
                 tier,
+                overdueSeconds: elapsed - slaSeconds,
+                isCalendar,
                 assigneeId: issue?.assignee?.id ?? null,
                 subject: issue?.title ?? "(No subject)",
               });
