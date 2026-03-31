@@ -723,8 +723,8 @@ function buildSlackHandoffMessage({
   const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
   const eHandoff = statusEmoji({ count: handoffIssues });
 
-  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|FR SLA Pending P0/P1>`;
-  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|FR SLA Pending P2/P3>`;
+  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|P0/P1 Pylon Queue>`;
+  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|P2/P3 Pylon Queue>`;
   const handoffLabel = `<${SLACK_LINKS.handoffIssues}|Handoff Issues>`;
   const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|Discord Community Issues>`;
 
