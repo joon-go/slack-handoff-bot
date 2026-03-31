@@ -610,12 +610,15 @@ function tierDisplayName(slug) {
  */
 function formatOverdue(overdueSeconds, isCalendar) {
   const totalHours = Math.floor(overdueSeconds / 3600);
+  const minutes = Math.ceil((overdueSeconds % 3600) / 60);
   if (isCalendar) {
     const days = Math.floor(totalHours / 24);
     const remHours = totalHours % 24;
     if (days > 0 && remHours > 0) return `+${days}d ${remHours}h overdue`;
     if (days > 0)                  return `+${days}d overdue`;
-    return `+${totalHours}h overdue`;
+    if (totalHours > 0)            return `+${totalHours}h overdue`;
+    if (minutes === 0)             return `<1m overdue`;
+    return `+${minutes}m overdue`;
   } else {
     const bizDays = Math.floor(totalHours / 8);
     const remBizHours = totalHours % 8;
@@ -623,7 +626,10 @@ function formatOverdue(overdueSeconds, isCalendar) {
       return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} ${remBizHours} biz hrs overdue`;
     if (bizDays > 0)
       return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} overdue`;
-    return `+${totalHours} biz hr${totalHours !== 1 ? "s" : ""} overdue`;
+    if (totalHours > 0)
+      return `+${totalHours} biz hr${totalHours !== 1 ? "s" : ""} overdue`;
+    if (minutes === 0) return `<1m overdue`;
+    return `+${minutes}m overdue`;
   }
 }
 
@@ -751,13 +757,13 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
     msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP0P1} P0/P1 Update SLA Breached: ${waitP0P1}`;
+  msg += `\n${eWaitP0P1} P0/P1 Update SLA Breached (>1 day): ${waitP0P1}`;
 
   if (waitP0P1 > 0 && waitP0P1Lines) {
     msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eWaitP2P3} P2/P3 Update SLA Breached: ${waitP2P3}`;
+  msg += `\n${eWaitP2P3} P2/P3 Update SLA Breached (>3 days): ${waitP2P3}`;
 
   if (waitP2P3 > 0 && waitP2P3Lines) {
     msg += `\n${waitP2P3Lines}`;
@@ -1053,8 +1059,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
  */
 async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
-  const waitP0P1CutoffUtc = nowPt.minus({ days: 1 }).toUTC();
-  const waitP2P3CutoffUtc = nowPt.minus({ days: 3 }).toUTC();
+  const waitP0P1CutoffUtc = nowPt.minus({ hours: 24 }).toUTC();
+  const waitP2P3CutoffUtc = nowPt.minus({ hours: 72 }).toUTC();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
 
