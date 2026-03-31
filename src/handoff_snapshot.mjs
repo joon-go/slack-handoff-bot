@@ -85,24 +85,27 @@ const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 //   unknown          = Unknown                    (confirmed from live data)
 const SLA_SECONDS = {
   //                   P0             P1              P2               P3
-  lite_legacy:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600], // biz hrs
-  pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600], // biz hrs
-  ultimate:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 8 * 3600], // P0=calendar, rest biz
-  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 8 * 3600], // P0=calendar, rest biz
-  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600   ], // P0+P1=calendar, rest biz
-  community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600   ], // best effort: calendar hrs
-  unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600   ], // best effort: calendar hrs
+  lite_legacy:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
+  pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
+  ultimate:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
+  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x7 calendar hrs
+  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // 24x7 calendar hrs
+  community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
+  unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
 };
 
-// Which cells use calendar hours (not business hours). All tiers listed explicitly.
-const SLA_IS_CALENDAR = {
-  lite_legacy:        [false, false, false, false], // all business hours
-  pro:                [false, false, false, false], // all business hours
-  ultimate:           [true,  false, false, false], // P0 = 24x5 calendar
-  enterprise:         [true,  false, false, false], // P0 = 24x7 calendar
-  enterprise_elite:   [true,  true,  false, false], // P0+P1 = 24x7 calendar
-  community:          [true,  true,  true,  true ], // best effort = calendar
-  unknown:            [true,  true,  true,  true ], // best effort = calendar
+// Coverage mode per tier × priority cell.
+// "biz"      = M-F 09:00-17:00 PT (8 h/day) — Lite Legacy, Pro
+// "weekday"  = M-F 00:00-24:00 PT (24 h/day) — Ultimate (24x5)
+// "calendar" = all hours, all days (24x7) — Enterprise tiers, best-effort tiers
+const SLA_COVERAGE = {
+  lite_legacy:        ["biz",      "biz",      "biz",      "biz"     ],
+  pro:                ["biz",      "biz",      "biz",      "biz"     ],
+  ultimate:           ["weekday",  "weekday",  "weekday",  "weekday" ],
+  enterprise:         ["calendar", "calendar", "calendar", "calendar"],
+  enterprise_elite:   ["calendar", "calendar", "calendar", "calendar"],
+  community:          ["calendar", "calendar", "calendar", "calendar"],
+  unknown:            ["calendar", "calendar", "calendar", "calendar"],
 };
 
 // Index mapping for SLA arrays
@@ -202,6 +205,42 @@ function businessHoursElapsedSeconds(createdAtIso, nowDt) {
     dt = dt.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
   }
   return elapsed;
+}
+
+/**
+ * Count elapsed weekday seconds between createdAtIso and nowDt.
+ * Weekday hours: M-F 00:00-24:00 America/Los_Angeles (24 h/day, no weekend).
+ * Used for Ultimate (24x5) coverage.
+ */
+function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
+  let dt = DateTime.fromISO(createdAtIso, { zone: "America/Los_Angeles" });
+  const end = nowDt.setZone("America/Los_Angeles");
+  let elapsed = 0;
+  while (dt < end) {
+    if (dt.weekday <= 5) { // 1=Mon..5=Fri
+      const eod = dt.set({ hour: 0, minute: 0, second: 0, millisecond: 0 }).plus({ days: 1 });
+      const windowEnd = end < eod ? end : eod;
+      elapsed += windowEnd.diff(dt, "seconds").seconds;
+    }
+    dt = dt.set({ hour: 0, minute: 0, second: 0, millisecond: 0 }).plus({ days: 1 });
+  }
+  return elapsed;
+}
+
+/**
+ * Dispatch elapsed-time calculation by SLA coverage mode.
+ * "biz"      → M-F 09:00-17:00 PT
+ * "weekday"  → M-F 00:00-24:00 PT
+ * "calendar" → all hours, all days
+ */
+function elapsedSeconds(createdAtIso, nowDt, coverage) {
+  if (coverage === "calendar") {
+    return nowDt.diff(DateTime.fromISO(createdAtIso), "seconds").seconds;
+  }
+  if (coverage === "weekday") {
+    return weekdayHoursElapsedSeconds(createdAtIso, nowDt);
+  }
+  return businessHoursElapsedSeconds(createdAtIso, nowDt);
 }
 
 // Presentation only; not Pylon priority
@@ -777,7 +816,7 @@ function buildSlackHandoffMessage({
 
   const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
   const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
-  const handoffLabel = `<${SLACK_LINKS.handoffIssues}|Handoff Issues>`;
+  const handoffLabel = `<${SLACK_LINKS.handoffIssues}|*Handoff Issues*>`;
   const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|Discord Community Issues>`;
 
   const region = regionLabelFromSlot(slot);
@@ -960,12 +999,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           // Compute time remaining until FRT SLA for display
           const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
-          const p0p1IsCalendar = p0p1SlaSeconds !== null ? (SLA_IS_CALENDAR[tier]?.[p0p1PrioIdx] ?? false) : false;
+          const p0p1Coverage = SLA_COVERAGE[tier]?.[p0p1PrioIdx] ?? "biz";
           let p0p1TimeRemaining = null;
           if (p0p1SlaSeconds !== null && issue.created_at) {
-            const p0p1Elapsed = p0p1IsCalendar
-              ? nowPt.diff(DateTime.fromISO(issue.created_at), "seconds").seconds
-              : businessHoursElapsedSeconds(issue.created_at, nowPt);
+            const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
             p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
           }
           p0p1Details.set(issue.id, {
@@ -974,7 +1011,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             priorityLabel: prioLabel,
             tier,
             timeRemainingSeconds: p0p1TimeRemaining,
-            isCalendar: p0p1IsCalendar,
+            isCalendar: p0p1Coverage !== "biz",
             assigneeId: issue?.assignee?.id ?? null,
             subject: issue?.title ?? "(No subject)",
           });
@@ -989,10 +1026,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
           if (slaSeconds !== null) {
-            const isCalendar = SLA_IS_CALENDAR[tier]?.[prioIdx] ?? false;
-            const elapsed = isCalendar
-              ? nowPt.diff(DateTime.fromISO(issue.created_at), "seconds").seconds
-              : businessHoursElapsedSeconds(issue.created_at, nowPt);
+            const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
+            const elapsed = elapsedSeconds(issue.created_at, nowPt, coverage);
             if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
               ids.slaBreached.add(issue.id);
               slaBreachedDetails.set(issue.id, {
@@ -1001,7 +1036,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
                 priorityLabel: prioLabel,
                 tier,
                 overdueSeconds: elapsed - slaSeconds,
-                isCalendar,
+                isCalendar: coverage !== "biz",
                 assigneeId: issue?.assignee?.id ?? null,
                 subject: issue?.title ?? "(No subject)",
               });
