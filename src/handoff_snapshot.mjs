@@ -623,7 +623,7 @@ function formatOverdue(overdueSeconds, isCalendar) {
     const bizDays = Math.floor(totalHours / 8);
     const remBizHours = totalHours % 8;
     if (bizDays > 0 && remBizHours > 0)
-      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} ${remBizHours} biz hrs overdue`;
+      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} ${remBizHours} biz hr${remBizHours !== 1 ? "s" : ""} overdue`;
     if (bizDays > 0)
       return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} overdue`;
     if (totalHours > 0)
