@@ -37,11 +37,8 @@
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
  *     P0/P1 => priority in [urgent, high]
  *     P2/P3 => priority in [medium, low]
- *     Aged > 5 Days (ALL priorities) => created_at < now-5d
  * - Under FR SLA Pending P0/P1 count line, prints issue line items:
  *     <#1234 link> | Assignee: Name | Subject: Title
- * - Under FR SLA Pending Aged > 5 days, prints issue line items:
- *     P0 | <#1234 link> | Assignee: Name | Subject: Title
  * - Handoff issues = OPEN state AND L1+L2 AND hand_off_region.value is set (single-select).
  * - Handoff issues lines:
  *     <#1234 link> | Assignee: Name | Handoff Region: EMEA/APAC/America | Handoff meeting required: Yes/No
@@ -565,28 +562,6 @@ function buildHandoffIssueLines(handoffIssuesList, assigneeIdToName) {
     .join("\n");
 }
 
-function buildAgedIssueLines(agedList, assigneeIdToName) {
-  const sorted = [...agedList].sort((a, b) => {
-    const pr = priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel);
-    if (pr !== 0) return pr;
-    if (!a.createdAtUtc && !b.createdAtUtc) return 0;
-    if (!a.createdAtUtc) return 1;
-    if (!b.createdAtUtc) return -1;
-    return a.createdAtUtc.toMillis() - b.createdAtUtc.toMillis();
-  });
-
-  return sorted
-    .map((it) => {
-      const issueLink = `<${pylonIssueUrl(it.id)}|#${it.number}>`;
-      const assignee =
-        it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
-      const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      // NOTE: you requested spaces around pipe separators (P0 | #1234 | ...)
-      return `${it.priorityLabel} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
-    })
-    .join("\n");
-}
-
 function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
   return p0p1List
     .map((it) => {
@@ -731,10 +706,8 @@ function buildSlackHandoffMessage({
   discordClosed,
   frP0P1,
   frP2P3,
-  frAgedAll,
   slaBreached,
   p0p1IssueLines,
-  agedIssueLines,
   slaBreachedLines,
   waitP0P1,
   waitP0P1Lines,
@@ -745,7 +718,6 @@ function buildSlackHandoffMessage({
 }) {
   const eP0P1 = statusEmoji({ count: frP0P1, alertLevel: "critical" });
   const eP2P3 = statusEmoji({ count: frP2P3 });
-  const eAged = statusEmoji({ count: frAgedAll });
   const eSlaBreached = statusEmoji({ count: slaBreached, alertLevel: "critical" });
   const eWaitP0P1 = statusEmoji({ count: waitP0P1, alertLevel: "critical" });
   const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
@@ -771,12 +743,7 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
     msg += `\n${p0p1IssueLines}`;
   }
 
-  msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}
-${eAged} FR SLA Pending Aged > 5 days: ${frAgedAll}`;
-
-  if (frAgedAll > 0 && agedIssueLines) {
-    msg += `\n${agedIssueLines}`;
-  }
+  msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
   msg += `\n${eSlaBreached} FR SLA Breached by Tier: ${slaBreached}`;
 
@@ -886,7 +853,6 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * Pass B: scan recent issues (within lookback window) collecting:
  * - FR SLA Pending P0/P1 (state=new + urgent/high)
  * - FR SLA Pending P2/P3 (state=new + medium/low)
- * - FR SLA Pending Aged > 5 days (ALL priorities) (state=new + created_at < now-5d)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  * - Discord Community Open issues (open + team L1+L2 + discord source or tag)
  *
@@ -896,7 +862,6 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  */
 async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
-  const agedCutoffUtc = nowPt.minus({ days: 5 }).toUTC();
 
   const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
   const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
@@ -904,7 +869,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const ids = {
     frP0P1: new Set(),
     frP2P3: new Set(),
-    frAgedAll: new Set(),
     slaBreached: new Set(),
     handoff: new Set(),
     discordOpen: new Set(),
@@ -912,7 +876,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   };
 
   const handoffDisplay = new Map();
-  const agedDetails = new Map();
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
 
@@ -950,20 +913,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
         if (prioRaw && P2_P3_PRIORITIES.has(prioRaw)) {
           ids.frP2P3.add(issue.id);
-        }
-
-        if (createdAtUtc && createdAtUtc < agedCutoffUtc) {
-          ids.frAgedAll.add(issue.id);
-          if (!agedDetails.has(issue.id)) {
-            agedDetails.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              assigneeId: issue?.assignee?.id ?? null,
-              subject: issue?.title ?? "(No subject)",
-              createdAtUtc,
-            });
-          }
         }
 
         // FRT SLA breach: check tier × priority threshold
@@ -1024,7 +973,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} slaBreached=${ids.slaBreached.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} slaBreached=${ids.slaBreached.size}`
     );
 
     if (!hasNext || !nextCursor) break;
@@ -1062,11 +1011,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
       ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
       : "";
 
-  const agedIssueLines =
-    ids.frAgedAll.size > 0
-      ? buildAgedIssueLines(Array.from(agedDetails.values()), assigneeIdToName)
-      : "";
-
   const p0p1IssueLines =
     ids.frP0P1.size > 0
       ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
@@ -1080,10 +1024,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
-    frAgedAll: ids.frAgedAll.size,
     slaBreached: ids.slaBreached.size,
     p0p1IssueLines,
-    agedIssueLines,
     slaBreachedLines,
     discordOpen: ids.discordOpen.size,
     discordClosed: ids.discordClosed.size,
@@ -1317,10 +1259,8 @@ async function main() {
     discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
-    frAgedAll: metrics.frAgedAll,
     slaBreached: metrics.slaBreached,
     p0p1IssueLines: metrics.p0p1IssueLines,
-    agedIssueLines: metrics.agedIssueLines,
     slaBreachedLines: metrics.slaBreachedLines,
     waitP0P1: waiting.waitP0P1,
     waitP0P1Lines: waiting.waitP0P1Lines,
@@ -1344,7 +1284,6 @@ async function main() {
     discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
-    frAgedAll: metrics.frAgedAll,
     slaBreached: metrics.slaBreached,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
