@@ -644,7 +644,7 @@ function formatTimeRemaining(seconds, isCalendar) {
   if (seconds === null || seconds === undefined) return "SLA N/A";
   if (seconds <= 0) return "overdue";
   const totalHours = Math.floor(seconds / 3600);
-  const remMins = Math.round((seconds % 3600) / 60);
+  const remMins = Math.floor((seconds % 3600) / 60);
   if (isCalendar) {
     const days = Math.floor(totalHours / 24);
     const hrs = totalHours % 24;
