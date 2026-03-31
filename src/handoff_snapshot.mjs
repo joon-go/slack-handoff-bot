@@ -562,6 +562,10 @@ function buildHandoffIssueLines(handoffIssuesList, assigneeIdToName) {
     .join("\n");
 }
 
+function isEnterpriseTier(tierSlug) {
+  return tierSlug === "enterprise" || tierSlug === "enterprise_elite";
+}
+
 function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
   return p0p1List
     .map((it) => {
@@ -569,9 +573,11 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      const tier = tierDisplayName(it.tier ?? "unknown");
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
       const timeLeft = formatTimeRemaining(it.timeRemainingSeconds, it.isCalendar);
-      return `${it.priorityLabel} | ${tier} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -584,9 +590,11 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      const tier = tierDisplayName(it.tier ?? "unknown");
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, true);
-      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -676,9 +684,11 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      const tier = tierDisplayName(it.tier);
+      const tierSlug = it.tier ?? "unknown";
+      const tier = tierDisplayName(tierSlug);
       const overdue = formatOverdue(it.overdueSeconds, it.isCalendar);
-      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const prefix = isEnterpriseTier(tierSlug) ? "🔴 " : "";
+      return `${prefix}${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
