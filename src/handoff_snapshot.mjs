@@ -764,8 +764,8 @@ function buildSlackHandoffMessage({
   const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
   const eHandoff = statusEmoji({ count: handoffIssues });
 
-  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|P0/P1 Pylon Queue>`;
-  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|P2/P3 Pylon Queue>`;
+  const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
+  const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
   const handoffLabel = `<${SLACK_LINKS.handoffIssues}|Handoff Issues>`;
   const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|Discord Community Issues>`;
 
@@ -786,19 +786,19 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
-  msg += `\n${eSlaBreached} FR SLA Breached: ${slaBreached}`;
+  msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
 
   if (slaBreached > 0 && slaBreachedLines) {
     msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP0P1} P0/P1 Update SLA Breached (>1 day): ${waitP0P1}`;
+  msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
 
   if (waitP0P1 > 0 && waitP0P1Lines) {
     msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eWaitP2P3} P2/P3 Update SLA Breached (>3 days): ${waitP2P3}`;
+  msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
 
   if (waitP2P3 > 0 && waitP2P3Lines) {
     msg += `\n${waitP2P3Lines}`;
