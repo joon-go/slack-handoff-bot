@@ -569,7 +569,8 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
       const assignee =
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
-      return `${it.priorityLabel} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const tier = tierDisplayName(it.tier ?? "unknown");
+      return `${it.priorityLabel} | ${tier} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -751,7 +752,7 @@ ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
-  msg += `\n${eSlaBreached} FR SLA Breached by Tier: ${slaBreached}`;
+  msg += `\n${eSlaBreached} FR SLA Breached: ${slaBreached}`;
 
   if (slaBreached > 0 && slaBreachedLines) {
     msg += `\n${slaBreachedLines}`;
@@ -906,12 +907,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
       // FR SLA Pending buckets (state=new only)
       if (issue.state === "new") {
+        const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
+        const tier = tierRaw.replace(/-/g, "_");
+
         if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
           ids.frP0P1.add(issue.id);
           p0p1Details.set(issue.id, {
             id: issue.id,
             number: issue.number,
             priorityLabel: prioLabel,
+            tier,
             assigneeId: issue?.assignee?.id ?? null,
             subject: issue?.title ?? "(No subject)",
           });
@@ -923,8 +928,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
         // FRT SLA breach: check tier × priority threshold
         if (prioRaw && issue.created_at) {
-          const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
-          const tier = tierRaw.replace(/-/g, "_");
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
           if (slaSeconds !== null) {
