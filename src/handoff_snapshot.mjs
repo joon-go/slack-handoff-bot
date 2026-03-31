@@ -570,7 +570,8 @@ function buildP0P1IssueLines(p0p1List, assigneeIdToName) {
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
       const tier = tierDisplayName(it.tier ?? "unknown");
-      return `${it.priorityLabel} | ${tier} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const timeLeft = formatTimeRemaining(it.timeRemainingSeconds, it.isCalendar);
+      return `${it.priorityLabel} | ${tier} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -631,6 +632,39 @@ function formatOverdue(overdueSeconds, isCalendar) {
       return `+${totalHours} biz hr${totalHours !== 1 ? "s" : ""} overdue`;
     if (minutes === 0) return `<1m overdue`;
     return `+${minutes}m overdue`;
+  }
+}
+
+/**
+ * Format time remaining until FRT SLA.
+ * Positive seconds → "3h 20m left" / "2 biz hrs left"
+ * Zero/negative    → "overdue"
+ */
+function formatTimeRemaining(seconds, isCalendar) {
+  if (seconds === null || seconds === undefined) return "SLA N/A";
+  if (seconds <= 0) return "overdue";
+  const totalHours = Math.floor(seconds / 3600);
+  const remMins = Math.round((seconds % 3600) / 60);
+  if (isCalendar) {
+    const days = Math.floor(totalHours / 24);
+    const hrs = totalHours % 24;
+    if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
+    if (days > 0)              return `${days}d left`;
+    if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
+    if (totalHours > 0)        return `${totalHours}h left`;
+    return `${remMins}m left`;
+  } else {
+    const bizDays = Math.floor(totalHours / 8);
+    const bizHrs = totalHours % 8;
+    if (bizDays > 0 && bizHrs > 0)
+      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} ${bizHrs} biz hr${bizHrs !== 1 ? "s" : ""} left`;
+    if (bizDays > 0)
+      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} left`;
+    if (totalHours > 0 && remMins > 0)
+      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} ${remMins}m left`;
+    if (totalHours > 0)
+      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} left`;
+    return `${remMins}m left`;
   }
 }
 
@@ -912,11 +946,24 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 
         if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
           ids.frP0P1.add(issue.id);
+          // Compute time remaining until FRT SLA for display
+          const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
+          const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
+          const p0p1IsCalendar = p0p1SlaSeconds !== null ? (SLA_IS_CALENDAR[tier]?.[p0p1PrioIdx] ?? false) : false;
+          let p0p1TimeRemaining = null;
+          if (p0p1SlaSeconds !== null && issue.created_at) {
+            const p0p1Elapsed = p0p1IsCalendar
+              ? nowPt.diff(DateTime.fromISO(issue.created_at), "seconds").seconds
+              : businessHoursElapsedSeconds(issue.created_at, nowPt);
+            p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
+          }
           p0p1Details.set(issue.id, {
             id: issue.id,
             number: issue.number,
             priorityLabel: prioLabel,
             tier,
+            timeRemainingSeconds: p0p1TimeRemaining,
+            isCalendar: p0p1IsCalendar,
             assigneeId: issue?.assignee?.id ?? null,
             subject: issue?.title ?? "(No subject)",
           });
