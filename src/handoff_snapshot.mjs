@@ -75,6 +75,42 @@ const OPEN_STATES = new Set(["new", "waiting_on_you", "waiting_on_customer", "on
 const P0_P1_PRIORITIES = new Set(["urgent", "high"]);
 const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 
+// FRT SLA matrix: tier slug -> [P0, P1, P2, P3] in seconds.
+// Business hours = M-F 09:00-17:00 PT unless SLA_IS_CALENDAR marks the cell true.
+// 1 biz day = 8 biz hrs.  "best effort" tiers use calendar hours with relaxed thresholds.
+// Pylon slug -> SLA table column:
+//   enterprise_elite = Enterprise Elite
+//   enterprise       = Enterprise Standard
+//   ultimate         = Pro Plus/Ultimate
+//   pro              = Pro                        (confirmed from live data)
+//   lite_legacy      = Lite (Legacy) & Pro (Legacy)
+//   community        = Free / Open Source / Community
+//   unknown          = Unknown                    (confirmed from live data)
+const SLA_SECONDS = {
+  //                   P0             P1              P2               P3
+  lite_legacy:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600], // biz hrs
+  pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600], // biz hrs
+  ultimate:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 8 * 3600], // P0=calendar, rest biz
+  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 8 * 3600], // P0=calendar, rest biz
+  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600   ], // P0+P1=calendar, rest biz
+  community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600   ], // best effort: calendar hrs
+  unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600   ], // best effort: calendar hrs
+};
+
+// Which cells use calendar hours (not business hours). All tiers listed explicitly.
+const SLA_IS_CALENDAR = {
+  lite_legacy:        [false, false, false, false], // all business hours
+  pro:                [false, false, false, false], // all business hours
+  ultimate:           [true,  false, false, false], // P0 = 24x5 calendar
+  enterprise:         [true,  false, false, false], // P0 = 24x7 calendar
+  enterprise_elite:   [true,  true,  false, false], // P0+P1 = 24x7 calendar
+  community:          [true,  true,  true,  true ], // best effort = calendar
+  unknown:            [true,  true,  true,  true ], // best effort = calendar
+};
+
+// Index mapping for SLA arrays
+const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
+
 // Header labels (handoff-to sequence)
 const SLOT_CONFIG = {
   apac: { headerLabel: "APAC to EMEA" },
@@ -145,6 +181,30 @@ function formatDatePt(dtPt) {
 
 function parseUtcIso(iso) {
   return iso ? DateTime.fromISO(iso, { zone: "utc" }) : null;
+}
+
+/**
+ * Count elapsed business-hours seconds between createdAtIso and nowDt.
+ * Business hours: M-F 09:00-17:00 America/Los_Angeles.
+ * Iterates day-by-day; handles tickets created outside business hours.
+ */
+function businessHoursElapsedSeconds(createdAtIso, nowDt) {
+  let dt = DateTime.fromISO(createdAtIso, { zone: "America/Los_Angeles" });
+  const end = nowDt.setZone("America/Los_Angeles");
+  let elapsed = 0;
+  while (dt < end) {
+    if (dt.weekday <= 5) { // 1=Mon..5=Fri
+      const dayStart = dt.set({ hour: 9,  minute: 0, second: 0, millisecond: 0 });
+      const dayEnd   = dt.set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
+      const windowStart = dt < dayStart ? dayStart : dt;
+      const windowEnd   = end < dayEnd  ? end       : dayEnd;
+      if (windowStart < windowEnd) {
+        elapsed += windowEnd.diff(windowStart, "seconds").seconds;
+      }
+    }
+    dt = dt.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
+  }
+  return elapsed;
 }
 
 // Presentation only; not Pylon priority
@@ -552,6 +612,33 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
     .join("\n");
 }
 
+function tierDisplayName(slug) {
+  switch (slug) {
+    case "enterprise_elite": return "Enterprise Elite";
+    case "enterprise":       return "Enterprise";
+    case "ultimate":         return "Ultimate";
+    case "pro":              return "Pro";
+    case "lite_legacy":      return "Lite Legacy";
+    case "community":        return "Community";
+    case "unknown":          return "Unknown";
+    default:                 return slug;
+  }
+}
+
+function buildSlaBreachedLines(list, assigneeIdToName) {
+  const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
+  return sorted
+    .map((it) => {
+      const issueLink = `<${pylonIssueUrl(it.id)}|#${it.number}>`;
+      const assignee =
+        it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
+      const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
+      const tier = tierDisplayName(it.tier);
+      return `${it.priorityLabel} | ${tier} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+    })
+    .join("\n");
+}
+
 /** ----------------------------
  *  ASSIGNMENT BREAKDOWN (new tickets)
  *  ---------------------------- */
@@ -617,8 +704,10 @@ function buildSlackHandoffMessage({
   frP0P1,
   frP2P3,
   frAgedAll,
+  slaBreached,
   p0p1IssueLines,
   agedIssueLines,
+  slaBreachedLines,
   waitP0P1,
   waitP0P1Lines,
   waitP2P3,
@@ -629,6 +718,7 @@ function buildSlackHandoffMessage({
   const eP0P1 = statusEmoji({ count: frP0P1, alertLevel: "critical" });
   const eP2P3 = statusEmoji({ count: frP2P3 });
   const eAged = statusEmoji({ count: frAgedAll });
+  const eSlaBreached = statusEmoji({ count: slaBreached, alertLevel: "critical" });
   const eWaitP0P1 = statusEmoji({ count: waitP0P1, alertLevel: "critical" });
   const eWaitP2P3 = statusEmoji({ count: waitP2P3 });
   const eHandoff = statusEmoji({ count: handoffIssues });
@@ -658,6 +748,12 @@ ${eAged} FR SLA Pending Aged > 5 days: ${frAgedAll}`;
 
   if (frAgedAll > 0 && agedIssueLines) {
     msg += `\n${agedIssueLines}`;
+  }
+
+  msg += `\n${eSlaBreached} FR SLA Breached by Tier: ${slaBreached}`;
+
+  if (slaBreached > 0 && slaBreachedLines) {
+    msg += `\n${slaBreachedLines}`;
   }
 
   msg += `\n${eWaitP0P1} P0/P1 Waiting on Support > 1 day: ${waitP0P1}`;
@@ -781,6 +877,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frP0P1: new Set(),
     frP2P3: new Set(),
     frAgedAll: new Set(),
+    slaBreached: new Set(),
     handoff: new Set(),
     discordOpen: new Set(),
     discordClosed: new Set(),
@@ -789,6 +886,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const handoffDisplay = new Map();
   const agedDetails = new Map();
   const p0p1Details = new Map();
+  const slaBreachedDetails = new Map();
 
   let cursor = null;
   const seenCursors = new Set();
@@ -839,6 +937,31 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             });
           }
         }
+
+        // FRT SLA breach: check tier × priority threshold
+        if (prioRaw && issue.created_at) {
+          const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
+          const tier = tierRaw.replace(/-/g, "_");
+          const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
+          const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
+          if (slaSeconds !== null) {
+            const isCalendar = SLA_IS_CALENDAR[tier]?.[prioIdx] ?? false;
+            const elapsed = isCalendar
+              ? nowPt.diff(DateTime.fromISO(issue.created_at), "seconds").seconds
+              : businessHoursElapsedSeconds(issue.created_at, nowPt);
+            if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
+              ids.slaBreached.add(issue.id);
+              slaBreachedDetails.set(issue.id, {
+                id: issue.id,
+                number: issue.number,
+                priorityLabel: prioLabel,
+                tier,
+                assigneeId: issue?.assignee?.id ?? null,
+                subject: issue?.title ?? "(No subject)",
+              });
+            }
+          }
+        }
       }
 
       // Open handoff issues
@@ -871,7 +994,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} agedAll=${ids.frAgedAll.size} slaBreached=${ids.slaBreached.size}`
     );
 
     if (!hasNext || !nextCursor) break;
@@ -919,12 +1042,19 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
       ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
       : "";
 
+  const slaBreachedLines =
+    ids.slaBreached.size > 0
+      ? buildSlaBreachedLines(Array.from(slaBreachedDetails.values()), assigneeIdToName)
+      : "";
+
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
     frAgedAll: ids.frAgedAll.size,
+    slaBreached: ids.slaBreached.size,
     p0p1IssueLines,
     agedIssueLines,
+    slaBreachedLines,
     discordOpen: ids.discordOpen.size,
     discordClosed: ids.discordClosed.size,
     handoffIssues: ids.handoff.size,
@@ -1153,8 +1283,10 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
+    slaBreached: metrics.slaBreached,
     p0p1IssueLines: metrics.p0p1IssueLines,
     agedIssueLines: metrics.agedIssueLines,
+    slaBreachedLines: metrics.slaBreachedLines,
     waitP0P1: waiting.waitP0P1,
     waitP0P1Lines: waiting.waitP0P1Lines,
     waitP2P3: waiting.waitP2P3,
@@ -1178,6 +1310,7 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     frAgedAll: metrics.frAgedAll,
+    slaBreached: metrics.slaBreached,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
     handoffIssues: metrics.handoffIssues,
