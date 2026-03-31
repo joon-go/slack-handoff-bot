@@ -608,7 +608,8 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
       const tier = tierDisplayName(it.tier ?? "unknown");
-      return `${it.priorityLabel} | ${tier} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+      const overdue = formatOverdue(it.overdueSeconds, true);
+      return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
     })
     .join("\n");
 }
@@ -783,13 +784,13 @@ ${eAged} FR SLA Pending Aged > 5 days: ${frAgedAll}`;
     msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP0P1} P0/P1 Waiting on Support > 1 day: ${waitP0P1}`;
+  msg += `\n${eWaitP0P1} P0/P1 Update SLA Breached: ${waitP0P1}`;
 
   if (waitP0P1 > 0 && waitP0P1Lines) {
     msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eWaitP2P3} P2/P3 Waiting on Support > 3 days: ${waitP2P3}`;
+  msg += `\n${eWaitP2P3} P2/P3 Update SLA Breached: ${waitP2P3}`;
 
   if (waitP2P3 > 0 && waitP2P3Lines) {
     msg += `\n${waitP2P3Lines}`;
@@ -1208,7 +1209,8 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     const status = waitStatusCache.get(issueId);
     if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP0P1CutoffUtc) {
       ids.waitP0P1.add(issueId);
-      waitP0P1Details.set(issueId, candidate);
+      const overdueSeconds = (nowPt.toMillis() - status.latestPublicMsgTime.toMillis()) / 1000 - 1 * 24 * 3600;
+      waitP0P1Details.set(issueId, { ...candidate, overdueSeconds, isCalendar: true });
     }
   }
 
@@ -1217,7 +1219,8 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     const status = waitStatusCache.get(issueId);
     if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP2P3CutoffUtc) {
       ids.waitP2P3.add(issueId);
-      waitP2P3Details.set(issueId, candidate);
+      const overdueSeconds = (nowPt.toMillis() - status.latestPublicMsgTime.toMillis()) / 1000 - 3 * 24 * 3600;
+      waitP2P3Details.set(issueId, { ...candidate, overdueSeconds, isCalendar: true });
     }
   }
 
