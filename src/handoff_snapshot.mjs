@@ -971,8 +971,24 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
+    // Debug: log first issue's raw fields once (to verify search response shape)
+    if (page === 1 && data.length > 0) {
+      const sample = data[0];
+      console.log("[SCAN-B][DEBUG] First issue raw keys:", Object.keys(sample).join(", "));
+      console.log("[SCAN-B][DEBUG] First issue team field:", JSON.stringify(sample?.team));
+      console.log("[SCAN-B][DEBUG] First issue tags field:", JSON.stringify(sample?.tags));
+    }
+
     for (const issue of data) {
       if (!issue?.id) continue;
+
+      // Debug: trace issue #14496 specifically regardless of team filter
+      if (issue.number === 14496) {
+        console.log(
+          `[SCAN-B][DEBUG] #14496 seen: state=${issue.state} source=${issue.source} tags=${JSON.stringify(issue.tags)} team=${JSON.stringify(issue.team)} isTeamL1L2=${isTeamL1L2(issue)} isDiscordIssue=${isDiscordIssue(issue)} isOpenState=${isOpenState(issue)}`
+        );
+      }
+
       if (!isTeamL1L2(issue)) continue;
 
       const prioRaw = getPriority(issue);
