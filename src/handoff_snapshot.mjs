@@ -348,11 +348,11 @@ function handoffLabelFromSlug(slug) {
 function getCreatedWindowForSlot(slot, nowPt) {
   const day = nowPt.startOf("day");
 
-  const t01 = day.plus({ hours: 1 });
-  const t03 = day.plus({ hours: 3 });
-  const t09 = day.plus({ hours: 9 });
-  const t10 = day.plus({ hours: 10 });
-  const t18 = day.plus({ hours: 18 });
+  const t01 = day.set({ hour: 1 });
+  const t03 = day.set({ hour: 3 });
+  const t09 = day.set({ hour: 9 });
+  const t10 = day.set({ hour: 10 });
+  const t18 = day.set({ hour: 18 });
 
   if (slot === "us") {
     const startPt = t09;
@@ -366,10 +366,14 @@ function getCreatedWindowForSlot(slot, nowPt) {
     return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
   }
 
-  // apac: 18:00 prev day -> 03:00 today
+  // apac: 18:00 prev day -> 03:00 today (cron at 3 AM)
+  // If running manually during the live APAC shift (hour >= 18), anchor forward instead:
+  //   live shift:      today 18:00 -> tomorrow 03:00
+  //   completed shift: yesterday 18:00 -> today 03:00
   {
-    const endPt = t03;
-    const startPt = endPt.minus({ hours: 9 });
+    const inLiveShift = nowPt.hour >= 18;
+    const startPt = inLiveShift ? t18 : t18.minus({ days: 1 });
+    const endPt = inLiveShift ? t03.plus({ days: 1 }) : t03;
     return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
   }
 }
