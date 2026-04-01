@@ -348,11 +348,11 @@ function handoffLabelFromSlug(slug) {
 function getCreatedWindowForSlot(slot, nowPt) {
   const day = nowPt.startOf("day");
 
-  const t01 = day.plus({ hours: 1 });
-  const t03 = day.plus({ hours: 3 });
-  const t09 = day.plus({ hours: 9 });
-  const t10 = day.plus({ hours: 10 });
-  const t18 = day.plus({ hours: 18 });
+  const t01 = day.set({ hour: 1 });
+  const t03 = day.set({ hour: 3 });
+  const t09 = day.set({ hour: 9 });
+  const t10 = day.set({ hour: 10 });
+  const t18 = day.set({ hour: 18 });
 
   if (slot === "us") {
     const startPt = t09;
