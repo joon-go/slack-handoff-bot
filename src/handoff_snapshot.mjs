@@ -684,8 +684,9 @@ function formatOverdue(overdueSeconds, isCalendar) {
 
 /**
  * Format time remaining until FRT SLA.
- * Positive seconds → "3h 20m left" / "2 biz hrs left"
+ * Positive seconds → "3h 20m left", "1d 2h left"
  * Zero/negative    → "overdue"
+ * Same format for all tiers (no "biz" terminology).
  */
 function formatTimeRemaining(seconds, isCalendar) {
   if (seconds === null || seconds === undefined) return "SLA N/A";
@@ -693,27 +694,13 @@ function formatTimeRemaining(seconds, isCalendar) {
   if (seconds < 60) return "<1m left";
   const totalHours = Math.floor(seconds / 3600);
   const remMins = Math.floor((seconds % 3600) / 60);
-  if (isCalendar) {
-    const days = Math.floor(totalHours / 24);
-    const hrs = totalHours % 24;
-    if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
-    if (days > 0)              return `${days}d left`;
-    if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
-    if (totalHours > 0)        return `${totalHours}h left`;
-    return `${remMins}m left`;
-  } else {
-    const bizDays = Math.floor(totalHours / 8);
-    const bizHrs = totalHours % 8;
-    if (bizDays > 0 && bizHrs > 0)
-      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} ${bizHrs} biz hr${bizHrs !== 1 ? "s" : ""} left`;
-    if (bizDays > 0)
-      return `${bizDays} biz day${bizDays > 1 ? "s" : ""} left`;
-    if (totalHours > 0 && remMins > 0)
-      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} ${remMins}m left`;
-    if (totalHours > 0)
-      return `${totalHours} biz hr${totalHours !== 1 ? "s" : ""} left`;
-    return `${remMins}m left`;
-  }
+  const days = Math.floor(totalHours / 24);
+  const hrs = totalHours % 24;
+  if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
+  if (days > 0)              return `${days}d left`;
+  if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
+  if (totalHours > 0)        return `${totalHours}h left`;
+  return `${remMins}m left`;
 }
 
 function buildSlaBreachedLines(list, assigneeIdToName) {
