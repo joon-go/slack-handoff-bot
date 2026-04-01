@@ -1128,6 +1128,65 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
 }
 
 /**
+ * Pass D: Count open Discord Community issues with no date restriction.
+ *
+ * Pass B's 30-day lookback silently drops old stale Discord issues (e.g. on_hold
+ * tickets opened 35+ days ago). This pass uses server-side state filters — one per
+ * open-but-not-new state — to scan ALL issues regardless of age, then filters
+ * locally for isDiscordIssue + isTeamL1L2.
+ *
+ * States scanned: waiting_on_you, waiting_on_customer, on_hold.
+ */
+async function scanDiscordOpenIssues({ pylonToken }) {
+  const OPEN_NON_NEW_STATES = ["waiting_on_you", "waiting_on_customer", "on_hold"];
+  const discordOpenIds = new Set();
+
+  for (const stateVal of OPEN_NON_NEW_STATES) {
+    const filter = { field: "state", operator: "equals", value: stateVal };
+    let cursor = null;
+    const seenCursors = new Set();
+    let page = 0;
+    const MAX_PAGES = 100;
+
+    while (true) {
+      page += 1;
+      const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, filter });
+      const data = Array.isArray(resp.data) ? resp.data : [];
+
+      for (const issue of data) {
+        if (!issue?.id) continue;
+        if (!isTeamL1L2(issue)) continue;
+        if (!isDiscordIssue(issue)) continue;
+        discordOpenIds.add(issue.id);
+      }
+
+      const hasNext = resp?.pagination?.has_next_page === true;
+      const nextCursor = resp?.pagination?.cursor ?? null;
+
+      console.log(
+        `[SCAN-D] state=${stateVal} page=${page} fetched=${data.length} discordOpen=${discordOpenIds.size}`
+      );
+
+      if (!hasNext || !nextCursor) break;
+      if (seenCursors.has(nextCursor)) {
+        console.warn(`[SCAN-D] cursor repeated for state=${stateVal}; stopping.`);
+        break;
+      }
+      seenCursors.add(nextCursor);
+      if (page >= MAX_PAGES) {
+        console.warn(`[SCAN-D] hit MAX_PAGES for state=${stateVal}; stopping.`);
+        break;
+      }
+
+      cursor = nextCursor;
+      await sleep(200);
+    }
+  }
+
+  return { discordOpen: discordOpenIds.size };
+}
+
+/**
  * Pass C: Scan waiting-on-support issues using server-side state filter.
  *
  * Uses Pylon API filter: { field: "state", operator: "equals", value: "waiting_on_you" }
@@ -1339,6 +1398,9 @@ async function main() {
   // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
   const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
 
+  // Pass D: Discord open count (no date restriction — catches stale old issues)
+  const discordCounts = await scanDiscordOpenIssues({ pylonToken });
+
   const slackText = buildSlackHandoffMessage({
     slot,
     headerLabel,
@@ -1347,7 +1409,7 @@ async function main() {
     newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
     newTicketsAssignedDiscordBreakdown: assignedBreakdown.discord,
     discordNew: assignedBreakdown.discordNew,
-    discordOpen: metrics.discordOpen,
+    discordOpen: discordCounts.discordOpen,
     discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
@@ -1372,7 +1434,7 @@ async function main() {
     assignedPylon: assignedBreakdown.pylon,
     assignedDiscord: assignedBreakdown.discord,
     discordNew: assignedBreakdown.discordNew,
-    discordOpen: metrics.discordOpen,
+    discordOpen: discordCounts.discordOpen,
     discordClosed: metrics.discordClosed,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
