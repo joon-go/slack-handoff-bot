@@ -684,9 +684,10 @@ function formatOverdue(overdueSeconds, isCalendar) {
 
 /**
  * Format time remaining until FRT SLA.
- * Positive seconds → "3h 20m left", "1d 2h left"
- * Zero/negative    → "overdue"
- * Same format for all tiers (no "biz" terminology).
+ * Calendar tiers (24x7, 24x5): "1d 2h left", "3h 20m left"
+ * Non-calendar tiers (9-5 biz hrs): always show total hours, never days,
+ *   because business hours ≠ calendar days ("24h left" not "1d left").
+ * Zero/negative → "overdue"
  */
 function formatTimeRemaining(seconds, isCalendar) {
   if (seconds === null || seconds === undefined) return "SLA N/A";
@@ -694,12 +695,14 @@ function formatTimeRemaining(seconds, isCalendar) {
   if (seconds < 60) return "<1m left";
   const totalHours = Math.floor(seconds / 3600);
   const remMins = Math.floor((seconds % 3600) / 60);
-  const days = Math.floor(totalHours / 24);
-  const hrs = totalHours % 24;
-  if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
-  if (days > 0)              return `${days}d left`;
+  if (isCalendar) {
+    const days = Math.floor(totalHours / 24);
+    const hrs = totalHours % 24;
+    if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
+    if (days > 0)              return `${days}d left`;
+  }
   if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
-  if (totalHours > 0)        return `${totalHours}h left`;
+  if (totalHours > 0)                return `${totalHours}h left`;
   return `${remMins}m left`;
 }
 
