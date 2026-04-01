@@ -817,7 +817,7 @@ Date: ${datePt}
 (New tickets during ${region}: ${newTicketsDuringShiftCount})
 Assigned (Pylon): ${newTicketsAssignedPylonBreakdown}
 Assigned (Discord): ${newTicketsAssignedDiscordBreakdown}
-🎫 ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
+:discord: ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
 ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   if (frP0P1 > 0 && p0p1IssueLines) {
