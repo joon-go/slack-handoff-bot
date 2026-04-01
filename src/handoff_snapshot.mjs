@@ -1380,6 +1380,8 @@ async function main() {
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
     handoffIssues: metrics.handoffIssues,
+    handoffIssueLines: metrics.handoffIssueLines || "(empty)",
+    slackMessageLength: slackText.length,
     scanBLookbackDays: metrics.lookbackDays,
     enforcedTeamId: TEAM_ID_L1_L2,
     openStates: Array.from(OPEN_STATES),
