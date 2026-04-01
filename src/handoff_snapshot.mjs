@@ -807,16 +807,16 @@ function buildSlackHandoffMessage({
   const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
   const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
   const handoffLabel = `<${SLACK_LINKS.handoffIssues}|*Handoff Issues*>`;
-  const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|Discord Community Issues>`;
+  const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|*Discord Community Issues*>`;
 
   const region = regionLabelFromSlot(slot);
 
   let msg =
 `*<${headerLabel} team handoff>*
-Date: ${datePt}
-(New tickets during ${region}: ${newTicketsDuringShiftCount})
-Assigned (Pylon): ${newTicketsAssignedPylonBreakdown}
-Assigned (Discord): ${newTicketsAssignedDiscordBreakdown}
+*Date:* ${datePt}
+*New tickets during ${region}:* ${newTicketsDuringShiftCount}
+*Assigned (Pylon):* ${newTicketsAssignedPylonBreakdown}
+*Assigned (Discord):* ${newTicketsAssignedDiscordBreakdown}
 :discord: ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
 ${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
@@ -1380,6 +1380,8 @@ async function main() {
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
     handoffIssues: metrics.handoffIssues,
+    handoffIssueLines: metrics.handoffIssueLines || "(empty)",
+    slackMessageLength: slackText.length,
     scanBLookbackDays: metrics.lookbackDays,
     enforcedTeamId: TEAM_ID_L1_L2,
     openStates: Array.from(OPEN_STATES),
