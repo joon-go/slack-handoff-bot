@@ -1306,7 +1306,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 1;
       const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
-      const threshold = 24 * 3600;
+      const threshold = coverage === "biz" ? 8 * 3600 : 24 * 3600;
       if (elapsed > threshold) {
         ids.waitP0P1.add(issueId);
         waitP0P1Details.set(issueId, {
@@ -1325,7 +1325,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 3;
       const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
-      const threshold = 72 * 3600;
+      const threshold = coverage === "biz" ? 24 * 3600 : 72 * 3600;
       if (elapsed > threshold) {
         ids.waitP2P3.add(issueId);
         waitP2P3Details.set(issueId, {
