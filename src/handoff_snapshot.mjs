@@ -1208,8 +1208,6 @@ async function scanDiscordOpenIssues({ pylonToken }) {
  */
 async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
-  const waitP0P1CutoffUtc = nowPt.minus({ hours: 24 }).toUTC();
-  const waitP2P3CutoffUtc = nowPt.minus({ hours: 72 }).toUTC();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
 
@@ -1304,20 +1302,38 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const waitP0P1Details = new Map();
   for (const [issueId, candidate] of waitP0P1Candidates) {
     const status = waitStatusCache.get(issueId);
-    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP0P1CutoffUtc) {
-      ids.waitP0P1.add(issueId);
-      const overdueSeconds = (nowPt.toMillis() - status.latestPublicMsgTime.toMillis()) / 1000 - 1 * 24 * 3600;
-      waitP0P1Details.set(issueId, { ...candidate, overdueSeconds, isCalendar: true });
+    if (status?.isCustomerLast && status.latestPublicMsgTime) {
+      const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 1;
+      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
+      const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
+      const threshold = 24 * 3600;
+      if (elapsed > threshold) {
+        ids.waitP0P1.add(issueId);
+        waitP0P1Details.set(issueId, {
+          ...candidate,
+          overdueSeconds: elapsed - threshold,
+          isCalendar: coverage !== "biz",
+        });
+      }
     }
   }
 
   const waitP2P3Details = new Map();
   for (const [issueId, candidate] of waitP2P3Candidates) {
     const status = waitStatusCache.get(issueId);
-    if (status?.isCustomerLast && status.latestPublicMsgTime && status.latestPublicMsgTime < waitP2P3CutoffUtc) {
-      ids.waitP2P3.add(issueId);
-      const overdueSeconds = (nowPt.toMillis() - status.latestPublicMsgTime.toMillis()) / 1000 - 3 * 24 * 3600;
-      waitP2P3Details.set(issueId, { ...candidate, overdueSeconds, isCalendar: true });
+    if (status?.isCustomerLast && status.latestPublicMsgTime) {
+      const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 3;
+      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
+      const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
+      const threshold = 72 * 3600;
+      if (elapsed > threshold) {
+        ids.waitP2P3.add(issueId);
+        waitP2P3Details.set(issueId, {
+          ...candidate,
+          overdueSeconds: elapsed - threshold,
+          isCalendar: coverage !== "biz",
+        });
+      }
     }
   }
 
