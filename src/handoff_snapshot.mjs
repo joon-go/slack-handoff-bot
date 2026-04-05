@@ -635,7 +635,7 @@ function buildWaitingOnSupportLines(list, assigneeIdToName) {
       const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
       const tierSlug = it.tier ?? "unknown";
       const tier = tierDisplayName(tierSlug);
-      const overdue = formatOverdue(it.overdueSeconds, true);
+      const overdue = formatOverdue(it.overdueSeconds, it.isCalendar);
       const suffix = isEnterpriseTier(tierSlug) ? " 📌" : "";
       return `${it.priorityLabel} | ${tier} | ${overdue} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}${suffix}`;
     })
