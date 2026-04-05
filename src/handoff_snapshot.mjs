@@ -705,8 +705,10 @@ function formatTimeRemaining(seconds, isCalendar) {
     if (days > 0 && hrs > 0)  return `${days}d ${hrs}h left`;
     if (days > 0)              return `${days}d left`;
   }
-  if (totalHours > 0 && remMins > 0) return `${totalHours}h ${remMins}m left`;
-  if (totalHours > 0)                return `${totalHours}h left`;
+  const hUnit = isCalendar ? "h" : " biz hr";
+  const hPlural = isCalendar ? "" : "s";
+  if (totalHours > 0 && remMins > 0) return `${totalHours}${hUnit}${totalHours !== 1 ? hPlural : ""} ${remMins}m left`;
+  if (totalHours > 0)                return `${totalHours}${hUnit}${totalHours !== 1 ? hPlural : ""} left`;
   return `${remMins}m left`;
 }
 
