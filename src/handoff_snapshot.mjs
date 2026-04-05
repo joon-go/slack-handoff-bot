@@ -676,11 +676,11 @@ function formatOverdue(overdueSeconds, isCalendar) {
     const bizDays = Math.floor(totalHours / 8);
     const remBizHours = totalHours % 8;
     if (bizDays > 0 && remBizHours > 0)
-      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} ${remBizHours} biz hr${remBizHours !== 1 ? "s" : ""} overdue`;
+      return `+${bizDays}d ${remBizHours}h overdue`;
     if (bizDays > 0)
-      return `+${bizDays} biz day${bizDays > 1 ? "s" : ""} overdue`;
+      return `+${bizDays}d overdue`;
     if (totalHours > 0)
-      return `+${totalHours} biz hr${totalHours !== 1 ? "s" : ""} overdue`;
+      return `+${totalHours}h overdue`;
     if (minutes === 0) return `<1m overdue`;
     return `+${minutes}m overdue`;
   }
