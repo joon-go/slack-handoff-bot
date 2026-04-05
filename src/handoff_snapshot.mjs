@@ -104,8 +104,8 @@ const SLA_COVERAGE = {
   ultimate:           ["weekday",  "weekday",  "weekday",  "weekday" ],
   enterprise:         ["calendar", "calendar", "calendar", "calendar"],
   enterprise_elite:   ["calendar", "calendar", "calendar", "calendar"],
-  community:          ["calendar", "calendar", "calendar", "calendar"],
-  unknown:            ["calendar", "calendar", "calendar", "calendar"],
+  community:          ["biz",      "biz",      "biz",      "biz"     ],
+  unknown:            ["biz",      "biz",      "biz",      "biz"     ],
 };
 
 // Index mapping for SLA arrays
@@ -1304,7 +1304,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     const status = waitStatusCache.get(issueId);
     if (status?.isCustomerLast && status.latestPublicMsgTime) {
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 1;
-      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
+      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "biz";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
       const threshold = coverage === "biz" ? 8 * 3600 : 24 * 3600;
       if (elapsed > threshold) {
@@ -1323,7 +1323,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     const status = waitStatusCache.get(issueId);
     if (status?.isCustomerLast && status.latestPublicMsgTime) {
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 3;
-      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "calendar";
+      const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "biz";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
       const threshold = coverage === "biz" ? 24 * 3600 : 72 * 3600;
       if (elapsed > threshold) {
