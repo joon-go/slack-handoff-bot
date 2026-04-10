@@ -1000,7 +1000,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
           // Only add to Pending if SLA unknown or not yet breached — overdue issues
           // move exclusively to FR SLA Breached.
-          if (p0p1TimeRemaining === null || p0p1TimeRemaining > 0) {
+          if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
             ids.frP0P1.add(issue.id);
             p0p1Details.set(issue.id, {
               id: issue.id,
