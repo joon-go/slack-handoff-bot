@@ -695,7 +695,7 @@ function formatOverdue(overdueSeconds, isCalendar) {
  */
 function formatTimeRemaining(seconds, isCalendar) {
   if (seconds === null || seconds === undefined) return "SLA N/A";
-  if (seconds <= 0) return "overdue";
+  if (seconds < 0) return formatOverdue(-seconds, isCalendar);
   if (seconds < 60) return "<1m left";
   const totalHours = Math.floor(seconds / 3600);
   const remMins = Math.floor((seconds % 3600) / 60);
@@ -989,7 +989,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         const tier = tierRaw.replace(/-/g, "_");
 
         if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
-          ids.frP0P1.add(issue.id);
           // Compute time remaining until FRT SLA for display
           const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
@@ -999,20 +998,34 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
             p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
           }
-          p0p1Details.set(issue.id, {
-            id: issue.id,
-            number: issue.number,
-            priorityLabel: prioLabel,
-            tier,
-            timeRemainingSeconds: p0p1TimeRemaining,
-            isCalendar: p0p1Coverage !== "biz",
-            assigneeId: issue?.assignee?.id ?? null,
-            subject: issue?.title ?? "(No subject)",
-          });
+          // Only add to Pending if SLA unknown or not yet breached — overdue issues
+          // move exclusively to FR SLA Breached.
+          if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
+            ids.frP0P1.add(issue.id);
+            p0p1Details.set(issue.id, {
+              id: issue.id,
+              number: issue.number,
+              priorityLabel: prioLabel,
+              tier,
+              timeRemainingSeconds: p0p1TimeRemaining,
+              isCalendar: p0p1Coverage !== "biz",
+              assigneeId: issue?.assignee?.id ?? null,
+              subject: issue?.title ?? "(No subject)",
+            });
+          }
         }
 
         if (prioRaw && P2_P3_PRIORITIES.has(prioRaw)) {
-          ids.frP2P3.add(issue.id);
+          // Only count as Pending if not yet overdue
+          const p2p3PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
+          const p2p3SlaSeconds = p2p3PrioIdx !== null ? (SLA_SECONDS[tier]?.[p2p3PrioIdx] ?? null) : null;
+          const p2p3Coverage = SLA_COVERAGE[tier]?.[p2p3PrioIdx] ?? "biz";
+          let p2p3Overdue = false;
+          if (p2p3SlaSeconds !== null && issue.created_at) {
+            const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
+            p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
+          }
+          if (!p2p3Overdue) ids.frP2P3.add(issue.id);
         }
 
         // FRT SLA breach: check tier × priority threshold
