@@ -88,6 +88,7 @@ const SLA_SECONDS = {
   lite_legacy:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
   pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
   pro_plus:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
+  ultimate:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // legacy slug → pro_plus
   enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x7 calendar hrs
   enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // 24x7 calendar hrs
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
@@ -102,6 +103,7 @@ const SLA_COVERAGE = {
   lite_legacy:        ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
   pro_plus:           ["weekday",  "weekday",  "weekday",  "weekday" ],
+  ultimate:           ["weekday",  "weekday",  "weekday",  "weekday" ], // legacy slug → pro_plus
   enterprise:         ["calendar", "calendar", "calendar", "calendar"],
   enterprise_elite:   ["calendar", "calendar", "calendar", "calendar"],
   community:          ["biz",      "biz",      "biz",      "biz"     ],
@@ -646,7 +648,8 @@ function tierDisplayName(slug) {
   switch (slug) {
     case "enterprise_elite": return "Enterprise Elite";
     case "enterprise":       return "Enterprise";
-    case "pro_plus":         return "Pro Plus";
+    case "pro_plus":
+    case "ultimate":         return "Pro Plus";
     case "pro":              return "Pro";
     case "lite_legacy":      return "Lite Legacy";
     case "community":        return "Community";
