@@ -210,7 +210,7 @@ function businessHoursElapsedSeconds(createdAtIso, nowDt) {
 /**
  * Count elapsed weekday seconds between createdAtIso and nowDt.
  * Weekday hours: M-F 00:00-24:00 America/Los_Angeles (24 h/day, no weekend).
- * Used for Ultimate (24x5) coverage.
+ * Used for Pro Plus (24x5) coverage.
  */
 function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
   let dt = DateTime.fromISO(createdAtIso, { zone: "America/Los_Angeles" });
