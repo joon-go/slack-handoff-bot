@@ -646,9 +646,9 @@ function tierDisplayName(slug) {
   switch (slug) {
     case "enterprise_elite": return "Enterprise Elite";
     case "enterprise":       return "Enterprise";
-    case "pro_plus":         return "Pro Plus";
+    case "pro_plus":         return "Pro+";
     case "pro":              return "Pro";
-    case "lite_legacy":      return "Lite Legacy";
+    case "lite_legacy":      return "Lite";
     case "community":        return "Community";
     case "unknown":          return "Unknown";
     default:                 return slug;
