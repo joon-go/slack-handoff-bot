@@ -78,7 +78,7 @@ const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 // Pylon slug -> SLA table column:
 //   enterprise_elite = Enterprise Elite
 //   enterprise       = Enterprise Standard
-//   ultimate         = Pro Plus/Ultimate
+//   pro_plus         = Pro Plus
 //   pro              = Pro                        (confirmed from live data)
 //   lite_legacy      = Lite (Legacy) & Pro (Legacy)
 //   community        = Free / Open Source / Community
@@ -87,7 +87,7 @@ const SLA_SECONDS = {
   //                   P0             P1              P2               P3
   lite_legacy:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
   pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
-  ultimate:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
+  pro_plus:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
   enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x7 calendar hrs
   enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // 24x7 calendar hrs
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
@@ -96,12 +96,12 @@ const SLA_SECONDS = {
 
 // Coverage mode per tier × priority cell.
 // "biz"      = M-F 09:00-17:00 PT (8 h/day) — Lite Legacy, Pro
-// "weekday"  = M-F 00:00-24:00 PT (24 h/day) — Ultimate (24x5)
+// "weekday"  = M-F 00:00-24:00 PT (24 h/day) — Pro Plus (24x5)
 // "calendar" = all hours, all days (24x7) — Enterprise tiers, best-effort tiers
 const SLA_COVERAGE = {
   lite_legacy:        ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
-  ultimate:           ["weekday",  "weekday",  "weekday",  "weekday" ],
+  pro_plus:           ["weekday",  "weekday",  "weekday",  "weekday" ],
   enterprise:         ["calendar", "calendar", "calendar", "calendar"],
   enterprise_elite:   ["calendar", "calendar", "calendar", "calendar"],
   community:          ["biz",      "biz",      "biz",      "biz"     ],
@@ -210,7 +210,7 @@ function businessHoursElapsedSeconds(createdAtIso, nowDt) {
 /**
  * Count elapsed weekday seconds between createdAtIso and nowDt.
  * Weekday hours: M-F 00:00-24:00 America/Los_Angeles (24 h/day, no weekend).
- * Used for Ultimate (24x5) coverage.
+ * Used for Pro Plus (24x5) coverage.
  */
 function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
   let dt = DateTime.fromISO(createdAtIso, { zone: "America/Los_Angeles" });
@@ -646,7 +646,7 @@ function tierDisplayName(slug) {
   switch (slug) {
     case "enterprise_elite": return "Enterprise Elite";
     case "enterprise":       return "Enterprise";
-    case "ultimate":         return "Ultimate";
+    case "pro_plus":         return "Pro Plus";
     case "pro":              return "Pro";
     case "lite_legacy":      return "Lite Legacy";
     case "community":        return "Community";
