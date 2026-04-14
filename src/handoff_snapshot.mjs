@@ -85,9 +85,9 @@ const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 //   unknown          = Unknown                    (confirmed from live data)
 const SLA_SECONDS = {
   //                   P0             P1              P2               P3
-  lite:        [8  * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
-  pro:                [4  * 3600,     12 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
-  pro_plus:           [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
+  lite:               [24 * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
+  pro:                [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
+  pro_plus:           [4  * 3600,     8  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
   enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x7 calendar hrs
   enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // 24x7 calendar hrs
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
