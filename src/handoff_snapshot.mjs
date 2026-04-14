@@ -1423,7 +1423,7 @@ async function main() {
     created.issues,
     assigneeIdToName
   );
-  const newTicketsDuringShiftCount = assignedBreakdown.assignedCount;
+  const newTicketsDuringShiftCount = created.issues.length;
 
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
