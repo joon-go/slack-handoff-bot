@@ -102,8 +102,8 @@ const SLA_COVERAGE = {
   lite:        ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
   pro_plus:           ["weekday",  "weekday",  "weekday",  "weekday" ],
-  enterprise:         ["calendar", "calendar", "calendar", "calendar"],
-  enterprise_elite:   ["calendar", "calendar", "calendar", "calendar"],
+  enterprise:         ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
+  enterprise_elite:   ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
   community:          ["biz",      "biz",      "biz",      "biz"     ],
   unknown:            ["biz",      "biz",      "biz",      "biz"     ],
 };
