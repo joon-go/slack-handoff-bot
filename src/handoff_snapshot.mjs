@@ -88,8 +88,8 @@ const SLA_SECONDS = {
   lite:               [24 * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
   pro:                [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
   pro_plus:           [4  * 3600,     8  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
-  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x7 calendar hrs
-  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // 24x7 calendar hrs
+  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
+  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // P0 24x7; P1-P3 weekday-only
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
   unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
 };
