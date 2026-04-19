@@ -233,23 +233,6 @@ function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
  * "weekday"  → M-F 00:00-24:00 PT
  * "calendar" → all hours, all days
  */
-/**
- * Returns true if the current time is inside the active window for a given
- * coverage mode. Used to suppress FR Pending alerts outside coverage hours.
- *   "calendar" → always active
- *   "weekday"  → Mon–Fri only
- *   "biz"      → Mon–Fri 09:00–17:00 PT only
- */
-function isInCoverageWindow(nowPt, coverage) {
-  if (coverage === "calendar") return true;
-  const weekday = nowPt.weekday; // 1=Mon … 7=Sun
-  if (weekday >= 6) return false; // Sat/Sun
-  if (coverage === "weekday") return true;
-  // biz: M-F 09:00-17:00 PT
-  const hour = nowPt.hour;
-  return hour >= 9 && hour < 17;
-}
-
 function elapsedSeconds(createdAtIso, nowDt, coverage) {
   if (coverage === "calendar") {
     return nowDt.diff(DateTime.fromISO(createdAtIso), "seconds").seconds;
@@ -258,6 +241,28 @@ function elapsedSeconds(createdAtIso, nowDt, coverage) {
     return weekdayHoursElapsedSeconds(createdAtIso, nowDt);
   }
   return businessHoursElapsedSeconds(createdAtIso, nowDt);
+}
+
+/**
+ * Check if nowDt is currently within the coverage window.
+ * "calendar" → always true (24x7)
+ * "weekday"  → true if M-F (any hour)
+ * "biz"      → true if M-F 09:00-17:00 PT
+ */
+function isInCoverageWindow(nowDt, coverage) {
+  if (coverage === "calendar") {
+    return true;
+  }
+  const nowPt = nowDt.setZone("America/Los_Angeles");
+  // Weekday check: Monday (1) through Friday (5)
+  if (nowPt.weekday > 5) {
+    return false; // Weekend
+  }
+  if (coverage === "weekday") {
+    return true; // M-F any hour
+  }
+  // Business hours: M-F 09:00-17:00
+  return nowPt.hour >= 9 && nowPt.hour < 17;
 }
 
 // Presentation only; not Pylon priority
@@ -1015,21 +1020,23 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
             p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
           }
-          // Only add to Pending if inside coverage window and not yet breached —
-          // outside-window issues are on pause (no active SLA); overdue issues
+          // Only add to Pending if SLA unknown or not yet breached — overdue issues
           // move exclusively to FR SLA Breached.
-          if (isInCoverageWindow(nowPt, p0p1Coverage) && (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0)) {
-            ids.frP0P1.add(issue.id);
-            p0p1Details.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              tier,
-              timeRemainingSeconds: p0p1TimeRemaining,
-              isCalendar: p0p1Coverage !== "biz",
-              assigneeId: issue?.assignee?.id ?? null,
-              subject: issue?.title ?? "(No subject)",
-            });
+          // For non-calendar tiers, suppress outside coverage window to avoid weekend/off-hours noise.
+          if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
+            if (p0p1Coverage === "calendar" || isInCoverageWindow(nowPt, p0p1Coverage)) {
+              ids.frP0P1.add(issue.id);
+              p0p1Details.set(issue.id, {
+                id: issue.id,
+                number: issue.number,
+                priorityLabel: prioLabel,
+                tier,
+                timeRemainingSeconds: p0p1TimeRemaining,
+                isCalendar: p0p1Coverage !== "biz",
+                assigneeId: issue?.assignee?.id ?? null,
+                subject: issue?.title ?? "(No subject)",
+              });
+            }
           }
         }
 
@@ -1043,7 +1050,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
             p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
           }
-          if (!p2p3Overdue && isInCoverageWindow(nowPt, p2p3Coverage)) ids.frP2P3.add(issue.id);
+          // For non-calendar tiers, suppress outside coverage window to avoid weekend/off-hours noise.
+          if (!p2p3Overdue && (p2p3Coverage === "calendar" || isInCoverageWindow(nowPt, p2p3Coverage))) {
+            ids.frP2P3.add(issue.id);
+          }
         }
 
         // FRT SLA breach: check tier × priority threshold
