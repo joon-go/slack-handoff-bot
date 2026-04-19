@@ -243,27 +243,6 @@ function elapsedSeconds(createdAtIso, nowDt, coverage) {
   return businessHoursElapsedSeconds(createdAtIso, nowDt);
 }
 
-/**
- * Check if nowDt is currently within the coverage window.
- * "calendar" → always true (24x7)
- * "weekday"  → true if M-F (any hour)
- * "biz"      → true if M-F 09:00-17:00 PT
- */
-function isInCoverageWindow(nowDt, coverage) {
-  if (coverage === "calendar") {
-    return true;
-  }
-  const nowPt = nowDt.setZone("America/Los_Angeles");
-  // Weekday check: Monday (1) through Friday (5)
-  if (nowPt.weekday > 5) {
-    return false; // Weekend
-  }
-  if (coverage === "weekday") {
-    return true; // M-F any hour
-  }
-  // Business hours: M-F 09:00-17:00
-  return nowPt.hour >= 9 && nowPt.hour < 17;
-}
 
 // Presentation only; not Pylon priority
 function statusEmoji({ count, alertLevel = "normal" }) {
@@ -1022,21 +1001,18 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
           // Only add to Pending if SLA unknown or not yet breached — overdue issues
           // move exclusively to FR SLA Breached.
-          // For non-calendar tiers, suppress outside coverage window to avoid weekend/off-hours noise.
           if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
-            if (p0p1Coverage === "calendar" || isInCoverageWindow(nowPt, p0p1Coverage)) {
-              ids.frP0P1.add(issue.id);
-              p0p1Details.set(issue.id, {
-                id: issue.id,
-                number: issue.number,
-                priorityLabel: prioLabel,
-                tier,
-                timeRemainingSeconds: p0p1TimeRemaining,
-                isCalendar: p0p1Coverage !== "biz",
-                assigneeId: issue?.assignee?.id ?? null,
-                subject: issue?.title ?? "(No subject)",
-              });
-            }
+            ids.frP0P1.add(issue.id);
+            p0p1Details.set(issue.id, {
+              id: issue.id,
+              number: issue.number,
+              priorityLabel: prioLabel,
+              tier,
+              timeRemainingSeconds: p0p1TimeRemaining,
+              isCalendar: p0p1Coverage !== "biz",
+              assigneeId: issue?.assignee?.id ?? null,
+              subject: issue?.title ?? "(No subject)",
+            });
           }
         }
 
@@ -1050,8 +1026,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
             p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
           }
-          // For non-calendar tiers, suppress outside coverage window to avoid weekend/off-hours noise.
-          if (!p2p3Overdue && (p2p3Coverage === "calendar" || isInCoverageWindow(nowPt, p2p3Coverage))) {
+          if (!p2p3Overdue) {
             ids.frP2P3.add(issue.id);
           }
         }
