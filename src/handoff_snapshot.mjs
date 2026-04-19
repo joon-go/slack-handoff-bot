@@ -243,11 +243,19 @@ function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
 function isInCoverageWindow(nowPt, coverage) {
   if (coverage === "calendar") return true;
   const weekday = nowPt.weekday; // 1=Mon … 7=Sun
-  if (weekday >= 6) return false; // Sat/Sun
-  if (coverage === "weekday") return true;
-  // biz: M-F 09:00-17:00 PT
   const hour = nowPt.hour;
+function isInCoverageWindow(nowPt, coverage) {
+  if (coverage === "calendar") return true;
+  const weekday = nowPt.weekday; // 1=Mon … 7=Sun
+  const hour = nowPt.hour;
+  // Saturday: never active for non-calendar coverage.
+  if (weekday === 6) return false;
+  // Sunday: activate only from 18:00 PT onward.
+  if (weekday === 7) return hour >= 18;
+  if (coverage === "weekday") return true; // Mon-Fri all day
+  // biz: M-F 09:00-17:00 PT
   return hour >= 9 && hour < 17;
+}
 }
 
 function elapsedSeconds(createdAtIso, nowDt, coverage) {
