@@ -243,10 +243,13 @@ function weekdayHoursElapsedSeconds(createdAtIso, nowDt) {
 function isInCoverageWindow(nowPt, coverage) {
   if (coverage === "calendar") return true;
   const weekday = nowPt.weekday; // 1=Mon … 7=Sun
-  if (weekday >= 6) return false; // Sat/Sun
-  if (coverage === "weekday") return true;
-  // biz: M-F 09:00-17:00 PT
   const hour = nowPt.hour;
+  // Sunday 18:00+ PT: APAC bot fires, India team comes online — start showing
+  // weekday and biz-tier pending issues so the incoming shift can prepare.
+  if (weekday === 7 && hour >= 18) return true;
+  if (weekday === 6) return false; // Saturday: never active for non-calendar
+  if (coverage === "weekday") return true; // Mon-Fri all day
+  // biz: M-F 09:00-17:00 PT
   return hour >= 9 && hour < 17;
 }
 
