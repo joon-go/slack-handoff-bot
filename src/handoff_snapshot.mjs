@@ -244,13 +244,18 @@ function isInCoverageWindow(nowPt, coverage) {
   if (coverage === "calendar") return true;
   const weekday = nowPt.weekday; // 1=Mon … 7=Sun
   const hour = nowPt.hour;
-  // Sunday 18:00+ PT: APAC bot fires, India team comes online — start showing
-  // weekday and biz-tier pending issues so the incoming shift can prepare.
-  if (weekday === 7 && hour >= 18) return true;
-  if (weekday === 6) return false; // Saturday: never active for non-calendar
+function isInCoverageWindow(nowPt, coverage) {
+  if (coverage === "calendar") return true;
+  const weekday = nowPt.weekday; // 1=Mon … 7=Sun
+  const hour = nowPt.hour;
+  // Saturday: never active for non-calendar coverage.
+  if (weekday === 6) return false;
+  // Sunday: activate only from 18:00 PT onward.
+  if (weekday === 7) return hour >= 18;
   if (coverage === "weekday") return true; // Mon-Fri all day
   // biz: M-F 09:00-17:00 PT
   return hour >= 9 && hour < 17;
+}
 }
 
 function elapsedSeconds(createdAtIso, nowDt, coverage) {
