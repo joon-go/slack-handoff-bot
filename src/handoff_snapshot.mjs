@@ -443,6 +443,24 @@ async function pylonSearch({ token, limit = 200, cursor = null, filter = null })
 }
 
 /**
+ * Fetch the display name for a Pylon account (company name).
+ * Returns null on failure — callers should fall back to tier label.
+ */
+async function fetchAccountName({ pylonToken, accountId }) {
+  if (!accountId) return null;
+  try {
+    const res = await fetch(`${PYLON_API_BASE}/accounts/${accountId}`, {
+      headers: { Authorization: `Bearer ${pylonToken}`, Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Determine if a message author is a customer.
  * Pylon is inconsistent — some messages have author.contact populated,
  * others use author.type === "contact".  Check both to be safe.
@@ -711,6 +729,24 @@ function formatTimeRemaining(seconds, isCalendar) {
   return `${remMins}m left`;
 }
 
+function buildEntFrPendingLines(list, assigneeIdToName) {
+  const sorted = [...list].sort((a, b) => {
+    const pr = priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel);
+    if (pr !== 0) return pr;
+    return (a.timeRemainingSeconds ?? Infinity) - (b.timeRemainingSeconds ?? Infinity);
+  });
+  return sorted
+    .map((it) => {
+      const issueLink = `<${pylonIssueUrl(it.id)}|#${it.number}>`;
+      const assignee = it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
+      const subject = (it.subject ?? "(No subject)").replace(/\s+/g, " ").trim();
+      const company = it.accountName ?? tierDisplayName(it.tier);
+      const timeLeft = formatTimeRemaining(it.timeRemainingSeconds, it.isCalendar);
+      return `${it.priorityLabel} | ${company} | ${timeLeft} | ${issueLink} | Assignee: ${assignee} | Subject: ${subject}`;
+    })
+    .join("\n");
+}
+
 function buildSlaBreachedLines(list, assigneeIdToName) {
   const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
   return sorted
@@ -790,6 +826,8 @@ function buildSlackHandoffMessage({
   discordNew,
   discordOpen,
   discordClosed,
+  entFrPending,
+  entFrPendingLines,
   frP0P1,
   frP2P3,
   slaBreached,
@@ -823,7 +861,13 @@ function buildSlackHandoffMessage({
 *Assigned (Pylon):* ${newTicketsAssignedPylonBreakdown}
 *Assigned (Discord):* ${newTicketsAssignedDiscordBreakdown}
 :discord: ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
-${eP0P1} ${frP0P1Label}: ${frP0P1}`;
+🏢 *Enterprise FR Pending:* ${entFrPending}`;
+
+  if (entFrPending > 0 && entFrPendingLines) {
+    msg += `\n${entFrPendingLines}`;
+  }
+
+  msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
 
   if (frP0P1 > 0 && p0p1IssueLines) {
     msg += `\n${p0p1IssueLines}`;
@@ -964,6 +1008,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
   const handoffDisplay = new Map();
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
+  const entFrPendingDetails = new Map(); // enterprise/elite issues in state=new, not yet breached
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1053,6 +1098,33 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             }
           }
         }
+
+        // Enterprise FR Pending: track all enterprise/elite new issues not yet breached
+        if (isEnterpriseTier(tier) && prioRaw && !entFrPendingDetails.has(issue.id)) {
+          const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
+          const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
+          const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "calendar";
+          let timeRemaining = null;
+          if (slaSeconds !== null && issue.created_at) {
+            const elapsed = elapsedSeconds(issue.created_at, nowPt, coverage);
+            timeRemaining = slaSeconds - elapsed;
+          }
+          if (timeRemaining === null || timeRemaining >= 0) {
+            entFrPendingDetails.set(issue.id, {
+              id: issue.id,
+              number: issue.number,
+              priorityLabel: prioLabel,
+              prioRaw,
+              tier,
+              accountId: issue?.account?.id ?? issue?.account_id ?? null,
+              accountName: null, // resolved after scan
+              timeRemainingSeconds: timeRemaining,
+              isCalendar: coverage !== "biz",
+              assigneeId: issue?.assignee?.id ?? null,
+              subject: issue?.title ?? "(No subject)",
+            });
+          }
+        }
       }
 
       // Open handoff issues
@@ -1118,6 +1190,20 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     await sleep(200);
   }
 
+  // Fetch account names for enterprise FR pending issues
+  if (entFrPendingDetails.size > 0) {
+    const accountNameCache = new Map();
+    for (const detail of entFrPendingDetails.values()) {
+      if (detail.accountId && !accountNameCache.has(detail.accountId)) {
+        const name = await fetchAccountName({ pylonToken, accountId: detail.accountId });
+        accountNameCache.set(detail.accountId, name);
+        await sleep(100);
+      }
+      detail.accountName = accountNameCache.get(detail.accountId) ?? null;
+    }
+    console.log(`[SCAN-B] Resolved account names for ${entFrPendingDetails.size} enterprise FR pending issues.`);
+  }
+
   const handoffIssueLines =
     ids.handoff.size > 0
       ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
@@ -1133,12 +1219,19 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
       ? buildSlaBreachedLines(Array.from(slaBreachedDetails.values()), assigneeIdToName)
       : "";
 
+  const entFrPendingLines =
+    entFrPendingDetails.size > 0
+      ? buildEntFrPendingLines(Array.from(entFrPendingDetails.values()), assigneeIdToName)
+      : "";
+
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
     slaBreached: ids.slaBreached.size,
     p0p1IssueLines,
     slaBreachedLines,
+    entFrPending: entFrPendingDetails.size,
+    entFrPendingLines,
     discordOpen: ids.discordOpen.size,
     discordClosed: ids.discordClosed.size,
     handoffIssues: ids.handoff.size,
@@ -1447,6 +1540,8 @@ async function main() {
     discordNew: assignedBreakdown.discordNew,
     discordOpen: discordCounts.discordOpen,
     discordClosed: metrics.discordClosed,
+    entFrPending: metrics.entFrPending,
+    entFrPendingLines: metrics.entFrPendingLines,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
