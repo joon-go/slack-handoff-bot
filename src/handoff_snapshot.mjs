@@ -1034,7 +1034,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
         const tier = tierRaw.replace(/-/g, "_");
 
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw)) {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
           // Compute time remaining until FRT SLA for display
           const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
@@ -1061,7 +1061,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
         }
 
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw)) {
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
           // Only count as Pending if not yet overdue
           const p2p3PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const p2p3SlaSeconds = p2p3PrioIdx !== null ? (SLA_SECONDS[tier]?.[p2p3PrioIdx] ?? null) : null;
