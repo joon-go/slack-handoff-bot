@@ -476,10 +476,17 @@ async function fetchAccountName({ pylonToken, accountId }) {
         continue;
       }
 
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[ACCOUNT] Non-OK response (${res.status}) for account ${accountId}`);
+        return null;
+      }
       const json = await res.json();
-      return json?.name ?? null;
-    } catch {
+      // Pylon REST API wraps single-resource responses in { data: { ... } }
+      const name = json?.data?.name ?? json?.name ?? null;
+      console.log(`[ACCOUNT] Resolved account ${accountId} → ${name ?? "(null)"}`);
+      return name;
+    } catch (err) {
+      console.warn(`[ACCOUNT] Fetch failed for account ${accountId}: ${err?.message || err}`);
       return null;
     }
   }
@@ -1135,13 +1142,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
             timeRemaining = slaSeconds - elapsed;
           }
           if (timeRemaining === null || timeRemaining >= 0) {
+            const accountId = issue?.account?.id ?? null;
+            console.log(`[SCAN-B] Enterprise issue #${issue.number} account field: ${JSON.stringify(issue?.account)} → accountId=${accountId}`);
             entFrPendingDetails.set(issue.id, {
               id: issue.id,
               number: issue.number,
               priorityLabel: prioLabel,
               prioRaw,
               tier,
-              accountId: issue?.account?.id ?? null,
+              accountId,
               accountName: null, // resolved after scan
               timeRemainingSeconds: timeRemaining,
               isCalendar: coverage !== "biz",
