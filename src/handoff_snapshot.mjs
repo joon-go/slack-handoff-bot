@@ -152,6 +152,7 @@ const SLACK_LINKS = {
   frSlaPendingP0P1: "https://app.usepylon.com/issues/views/039f2559-c7ca-4550-929e-31dc881351d3",
   frSlaPendingP2P3: "https://app.usepylon.com/issues/views/70565321-570f-4dfe-856a-c767e4042511",
   discordCommunityOpen: "https://app.usepylon.com/issues/views/f22611f4-c563-483a-bc36-b7d7d7014df6",
+  entFrPending: "https://app.usepylon.com/support/issues/views/52449f32-d81d-4202-a03b-bd29341e6d26",
 };
 
 // Pylon issue permalink
@@ -893,7 +894,7 @@ function buildSlackHandoffMessage({
 *Assigned (Pylon):* ${newTicketsAssignedPylonBreakdown}
 *Assigned (Discord):* ${newTicketsAssignedDiscordBreakdown}
 :discord: ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
-🏢 *Enterprise FR Pending:* ${entFrPending}`;
+🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
 
   if (entFrPending > 0 && entFrPendingLines) {
     msg += `\n${entFrPendingLines}`;
