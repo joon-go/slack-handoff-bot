@@ -1143,7 +1143,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
           if (timeRemaining === null || timeRemaining >= 0) {
             const accountId = issue?.account?.id ?? null;
-            console.log(`[SCAN-B] Enterprise issue #${issue.number} account field: ${JSON.stringify(issue?.account)} → accountId=${accountId}`);
+            console.log(`[SCAN-B] Enterprise issue #${issue.number}: accountId=${accountId ?? "(none)"}`);
             entFrPendingDetails.set(issue.id, {
               id: issue.id,
               number: issue.number,
