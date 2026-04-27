@@ -445,18 +445,43 @@ async function pylonSearch({ token, limit = 200, cursor = null, filter = null })
 /**
  * Fetch the display name for a Pylon account (company name).
  * Returns null on failure — callers should fall back to tier label.
+ * Includes timeout (10s) and retry logic for 429 rate limits.
  */
 async function fetchAccountName({ pylonToken, accountId }) {
   if (!accountId) return null;
-  try {
-    const res = await fetch(`${PYLON_API_BASE}/accounts/${accountId}`, {
-      headers: { Authorization: `Bearer ${pylonToken}`, Accept: "application/json" },
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json?.name ?? null;
-  } catch {
-    return null;
+
+  const maxAttempts = 3;
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+
+    try {
+      const res = await fetch(`${PYLON_API_BASE}/accounts/${accountId}`, {
+        headers: { Authorization: `Bearer ${pylonToken}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(10000), // 10s timeout
+      });
+
+      if (res.status === 429) {
+        if (attempt >= maxAttempts) {
+          console.warn(`[ACCOUNT] 429 after ${maxAttempts} attempts for account ${accountId}; returning null`);
+          return null;
+        }
+        const retryAfterHeader = res.headers.get("retry-after");
+        const retryAfterMs = retryAfterHeader
+          ? Number(retryAfterHeader) * 1000
+          : Math.min(5000, 500 * 2 ** (attempt - 1));
+
+        await sleep(retryAfterMs);
+        continue;
+      }
+
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json?.name ?? null;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -1103,7 +1128,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         if (isEnterpriseTier(tier) && prioRaw && !entFrPendingDetails.has(issue.id)) {
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
-          const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "calendar";
+          const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
           let timeRemaining = null;
           if (slaSeconds !== null && issue.created_at) {
             const elapsed = elapsedSeconds(issue.created_at, nowPt, coverage);
@@ -1116,7 +1141,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
               priorityLabel: prioLabel,
               prioRaw,
               tier,
-              accountId: issue?.account?.id ?? issue?.account_id ?? null,
+              accountId: issue?.account?.id ?? null,
               accountName: null, // resolved after scan
               timeRemainingSeconds: timeRemaining,
               isCalendar: coverage !== "biz",
