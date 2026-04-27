@@ -18,7 +18,7 @@
  *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
  *   SCAN_B_LOOKBACK_DAYS=30               # override the SCAN-B lookback window (default 30)
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
- *   PYLON_MESSAGES_DELAY_MS=500           # delay between message API calls (default 500ms)
+ *   PYLON_MESSAGES_DELAY_MS=200           # delay between message API calls (default 200ms)
  *
  * Config files:
  *   config/rosters.json  # shift rosters per region (edit without code changes)
@@ -1419,7 +1419,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   }
 
   // Resolve waiting-on-support candidates via per-issue messages API.
-  const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
+  const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 200);
   const allWaitCandidates = new Map([...waitP0P1Candidates, ...waitP2P3Candidates]);
   const waitStatusCache = new Map();
 
