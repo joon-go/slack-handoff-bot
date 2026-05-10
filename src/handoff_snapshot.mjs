@@ -801,6 +801,23 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
  *  ASSIGNMENT BREAKDOWN (new tickets)
  *  ---------------------------- */
 
+/**
+ * Determine the shift lead for a given slot and month.
+ * Rotates through the slot's roster using: rosterIndex = month % roster.length
+ * The roster order in rosters.json defines the rotation sequence.
+ * Example (US roster = [Feran, Tassia, Fariha, Tim]):
+ *   May (5)  → 5 % 4 = 1 → Tassia
+ *   Jun (6)  → 6 % 4 = 2 → Fariha
+ *   Jul (7)  → 7 % 4 = 3 → Tim
+ *   Aug (8)  → 8 % 4 = 0 → Feran
+ */
+function getShiftLead(slot, nowPt) {
+  const roster = REGION_ROSTERS[slot] || [];
+  if (roster.length === 0) return "TBD";
+  const idx = nowPt.month % roster.length;
+  return roster[idx];
+}
+
 function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) {
   const roster = REGION_ROSTERS[slot] || [];
   const pylonCounts = new Map(roster.map((n) => [n, 0]));
@@ -852,6 +869,7 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
 function buildSlackHandoffMessage({
   slot,
   headerLabel,
+  shiftLead,
   datePt,
   newTicketsDuringShiftCount,
   newTicketsAssignedPylonBreakdown,
@@ -889,6 +907,7 @@ function buildSlackHandoffMessage({
 
   let msg =
 `*<${headerLabel} team handoff>*
+*Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
 *New tickets during ${region}:* ${newTicketsDuringShiftCount}
 *Assigned (Pylon):* ${newTicketsAssignedPylonBreakdown}
@@ -1554,6 +1573,7 @@ async function main() {
     assigneeIdToName
   );
   const newTicketsDuringShiftCount = created.issues.length;
+  const shiftLead = getShiftLead(slot, ptNow());
 
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
@@ -1567,6 +1587,7 @@ async function main() {
   const slackText = buildSlackHandoffMessage({
     slot,
     headerLabel,
+    shiftLead,
     datePt,
     newTicketsDuringShiftCount,
     newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
