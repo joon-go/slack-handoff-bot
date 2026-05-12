@@ -1,5 +1,10 @@
 {
   "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
-  "apac": ["Saurabh Lambe", "Chinmay Koratkar"],
-  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"]
+  "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie"],
+  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"],
+  "shift_lead_anchor": {
+    "us":   { "name": "Tassia Shibuya",   "year": 2026, "month": 5 },
+    "emea": { "name": "Tommy Lundy",      "year": 2026, "month": 5 },
+    "apac": { "name": "Chinmay Koratkar", "year": 2026, "month": 5 }
+  }
 }

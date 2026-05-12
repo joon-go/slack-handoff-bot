@@ -137,6 +137,7 @@ function loadRosters() {
       emea: Array.isArray(parsed.emea) ? parsed.emea : DEFAULT_ROSTERS.emea,
       apac: Array.isArray(parsed.apac) ? parsed.apac : DEFAULT_ROSTERS.apac,
       us: Array.isArray(parsed.us) ? parsed.us : DEFAULT_ROSTERS.us,
+      shift_lead_anchor: parsed.shift_lead_anchor ?? null,
     };
   } catch (err) {
     console.warn(`[CONFIG] Could not load config/rosters.json, using defaults: ${err?.message || err}`);
@@ -803,19 +804,38 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
 
 /**
  * Determine the shift lead for a given slot and month.
- * Rotates through the slot's roster using: rosterIndex = month % roster.length
- * The roster order in rosters.json defines the rotation sequence.
- * Example (US roster = [Feran, Tassia, Fariha, Tim]):
- *   May (5)  → 5 % 4 = 1 → Tassia
- *   Jun (6)  → 6 % 4 = 2 → Fariha
- *   Jul (7)  → 7 % 4 = 3 → Tim
- *   Aug (8)  → 8 % 4 = 0 → Feran
+ *
+ * Uses an anchor point from rosters.json shift_lead_anchor to calculate
+ * the rotation. This is robust to roster size changes — adding/removing
+ * people won't shift the rotation for existing members.
+ *
+ * Formula: anchorIndex + monthsElapsed(anchor → now), modulo roster.length
+ *
+ * To update: set shift_lead_anchor[slot] to whoever leads this month and
+ * the current year/month. The rotation will advance forward automatically.
+ *
+ * Example (APAC anchor: Chinmay, May 2026, roster = [Saurabh, Chinmay, Stacie]):
+ *   May 2026  → 0 months elapsed → index 1 → Chinmay
+ *   Jun 2026  → 1 month elapsed  → index 2 → Stacie
+ *   Jul 2026  → 2 months elapsed → index 0 → Saurabh
  */
 function getShiftLead(slot, nowPt) {
   const roster = REGION_ROSTERS[slot] || [];
   if (roster.length === 0) return "TBD";
-  const idx = nowPt.month % roster.length;
-  return roster[idx];
+
+  const anchor = REGION_ROSTERS.shift_lead_anchor?.[slot];
+  if (anchor) {
+    const anchorIdx = roster.indexOf(anchor.name);
+    if (anchorIdx !== -1) {
+      const monthsElapsed = (nowPt.year - anchor.year) * 12 + (nowPt.month - anchor.month);
+      const idx = ((anchorIdx + monthsElapsed) % roster.length + roster.length) % roster.length;
+      return roster[idx];
+    }
+    console.warn(`[ROSTER] shift_lead_anchor name "${anchor.name}" not found in ${slot} roster; falling back.`);
+  }
+
+  // Fallback: simple month % length (fragile to roster size changes)
+  return roster[nowPt.month % roster.length];
 }
 
 function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) {
