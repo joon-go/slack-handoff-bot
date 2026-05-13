@@ -33,7 +33,7 @@
  *     APAC: 18:00 -> 03:00 (cross-midnight)
  * - "New tickets during <REGION>" counts issues created in that window (open + closed), team L1+L2 only.
  * - Under New tickets line, prints assignment breakdown for the shift roster:
- *     Assigned (new tickets): Name: N | Name: N | ...
+ *     Assigned: Name: N | Name: N | ...
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
  *     P0/P1 => priority in [urgent, high]
  *     P2/P3 => priority in [medium, low]
@@ -151,7 +151,6 @@ const SLACK_LINKS = {
   handoffIssues: "https://app.usepylon.com/issues/views/e799d418-120d-4849-bf81-37d5afdba15c",
   frSlaPendingP0P1: "https://app.usepylon.com/issues/views/039f2559-c7ca-4550-929e-31dc881351d3",
   frSlaPendingP2P3: "https://app.usepylon.com/issues/views/70565321-570f-4dfe-856a-c767e4042511",
-  discordCommunityOpen: "https://app.usepylon.com/issues/views/f22611f4-c563-483a-bc36-b7d7d7014df6",
   entFrPending: "https://app.usepylon.com/support/issues/views/52449f32-d81d-4202-a03b-bd29341e6d26",
 };
 
@@ -290,10 +289,6 @@ function priorityRank(pLabel) {
 
 function isTeamL1L2(issue) {
   return issue?.team?.id === TEAM_ID_L1_L2;
-}
-
-function isDiscordIssue(issue) {
-  return issue?.source === "discord" || (Array.isArray(issue?.tags) && issue.tags.includes("discord-bot"));
 }
 
 function isOpenState(issue) {
@@ -821,7 +816,6 @@ function getShiftLead(slot, nowPt) {
 function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) {
   const roster = REGION_ROSTERS[slot] || [];
   const pylonCounts = new Map(roster.map((n) => [n, 0]));
-  const discordCounts = new Map(roster.map((n) => [n, 0]));
 
   // Warn if any roster member's name doesn't match any Pylon user — counts for
   // that person will silently be 0, which would make the handoff report wrong.
@@ -841,24 +835,15 @@ function formatAssignedBreakdownForShift(slot, createdIssues, assigneeIdToName) 
     const assigneeName = assigneeIdToName[assigneeId];
     if (!assigneeName || !pylonCounts.has(assigneeName)) continue;
 
-    if (isDiscordIssue(issue)) {
-      discordCounts.set(assigneeName, (discordCounts.get(assigneeName) || 0) + 1);
-    } else {
-      pylonCounts.set(assigneeName, (pylonCounts.get(assigneeName) || 0) + 1);
-    }
+    pylonCounts.set(assigneeName, (pylonCounts.get(assigneeName) || 0) + 1);
   }
 
   const pylonLine = roster.map((n) => `${n}: ${pylonCounts.get(n) || 0}`).join(" | ");
-  const discordLine = roster.map((n) => `${n}: ${discordCounts.get(n) || 0}`).join(" | ");
-
-  const assignedCount = [...pylonCounts.values(), ...discordCounts.values()].reduce((s, v) => s + v, 0);
-  const discordNew = [...discordCounts.values()].reduce((s, v) => s + v, 0);
+  const assignedCount = [...pylonCounts.values()].reduce((s, v) => s + v, 0);
 
   return {
     pylon: pylonLine,
-    discord: discordLine,
     assignedCount,
-    discordNew,
   };
 }
 
@@ -873,10 +858,6 @@ function buildSlackHandoffMessage({
   datePt,
   newTicketsDuringShiftCount,
   newTicketsAssignedPylonBreakdown,
-  newTicketsAssignedDiscordBreakdown,
-  discordNew,
-  discordOpen,
-  discordClosed,
   entFrPending,
   entFrPendingLines,
   frP0P1,
@@ -901,7 +882,6 @@ function buildSlackHandoffMessage({
   const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
   const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
   const handoffLabel = `<${SLACK_LINKS.handoffIssues}|*Handoff Issues*>`;
-  const discordCommunityLabel = `<${SLACK_LINKS.discordCommunityOpen}|*Discord Community Issues*>`;
 
   const region = regionLabelFromSlot(slot);
 
@@ -910,9 +890,7 @@ function buildSlackHandoffMessage({
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
 *New tickets during ${region}:* ${newTicketsDuringShiftCount}
-*Assigned (Pylon):* ${newTicketsAssignedPylonBreakdown}
-*Assigned (Discord):* ${newTicketsAssignedDiscordBreakdown}
-:discord: ${discordCommunityLabel}: New ${discordNew} | Open ${discordOpen} | Closed ${discordClosed}
+*Assigned:* ${newTicketsAssignedPylonBreakdown}
 🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
 
   if (entFrPending > 0 && entFrPendingLines) {
@@ -1036,7 +1014,6 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * - FR SLA Pending P0/P1 (state=new + urgent/high)
  * - FR SLA Pending P2/P3 (state=new + medium/low)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
- * - Discord Community Open issues (open + team L1+L2 + discord source or tag)
  *
  * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 30).
  * Waiting-on-support is handled separately by scanWaitingOnSupport()
@@ -1053,8 +1030,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     frP2P3: new Set(),
     slaBreached: new Set(),
     handoff: new Set(),
-    discordOpen: new Set(),
-    discordClosed: new Set(),
   };
 
   const handoffDisplay = new Map();
@@ -1196,14 +1171,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
         }
       }
 
-      // Discord Community Issues (split by state)
-      if (isDiscordIssue(issue)) {
-        if (isOpenState(issue) && issue.state !== "new") {
-          ids.discordOpen.add(issue.id);
-        } else if (!isOpenState(issue)) {
-          ids.discordClosed.add(issue.id);
-        }
-      }
     }
 
     const hasNext = resp?.pagination?.has_next_page === true;
@@ -1285,71 +1252,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     slaBreachedLines,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
-    discordOpen: ids.discordOpen.size,
-    discordClosed: ids.discordClosed.size,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
   };
-}
-
-/**
- * Pass D: Count open Discord Community issues with no date restriction.
- *
- * Pass B's 30-day lookback silently drops old stale Discord issues (e.g. on_hold
- * tickets opened 35+ days ago). This pass uses server-side state filters — one per
- * open-but-not-new state — to scan ALL issues regardless of age, then filters
- * locally for isDiscordIssue + isTeamL1L2.
- *
- * States scanned: waiting_on_you, waiting_on_customer, on_hold.
- */
-async function scanDiscordOpenIssues({ pylonToken }) {
-  const OPEN_NON_NEW_STATES = ["waiting_on_you", "waiting_on_customer", "on_hold"];
-  const discordOpenIds = new Set();
-
-  for (const stateVal of OPEN_NON_NEW_STATES) {
-    const filter = { field: "state", operator: "equals", value: stateVal };
-    let cursor = null;
-    const seenCursors = new Set();
-    let page = 0;
-    const MAX_PAGES = 100;
-
-    while (true) {
-      page += 1;
-      const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, filter });
-      const data = Array.isArray(resp.data) ? resp.data : [];
-
-      for (const issue of data) {
-        if (!issue?.id) continue;
-        if (!isTeamL1L2(issue)) continue;
-        if (!isDiscordIssue(issue)) continue;
-        discordOpenIds.add(issue.id);
-      }
-
-      const hasNext = resp?.pagination?.has_next_page === true;
-      const nextCursor = resp?.pagination?.cursor ?? null;
-
-      console.log(
-        `[SCAN-D] state=${stateVal} page=${page} fetched=${data.length} discordOpen=${discordOpenIds.size}`
-      );
-
-      if (!hasNext || !nextCursor) break;
-      if (seenCursors.has(nextCursor)) {
-        console.warn(`[SCAN-D] cursor repeated for state=${stateVal}; stopping.`);
-        break;
-      }
-      seenCursors.add(nextCursor);
-      if (page >= MAX_PAGES) {
-        console.warn(`[SCAN-D] hit MAX_PAGES for state=${stateVal}; stopping.`);
-        break;
-      }
-
-      cursor = nextCursor;
-      await sleep(200);
-    }
-  }
-
-  return { discordOpen: discordOpenIds.size };
 }
 
 /**
@@ -1581,9 +1487,6 @@ async function main() {
   // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
   const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
 
-  // Pass D: Discord open count (no date restriction — catches stale old issues)
-  const discordCounts = await scanDiscordOpenIssues({ pylonToken });
-
   const slackText = buildSlackHandoffMessage({
     slot,
     headerLabel,
@@ -1591,10 +1494,6 @@ async function main() {
     datePt,
     newTicketsDuringShiftCount,
     newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
-    newTicketsAssignedDiscordBreakdown: assignedBreakdown.discord,
-    discordNew: assignedBreakdown.discordNew,
-    discordOpen: discordCounts.discordOpen,
-    discordClosed: metrics.discordClosed,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
     frP0P1: metrics.frP0P1,
@@ -1617,11 +1516,7 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assignedPylon: assignedBreakdown.pylon,
-    assignedDiscord: assignedBreakdown.discord,
-    discordNew: assignedBreakdown.discordNew,
-    discordOpen: discordCounts.discordOpen,
-    discordClosed: metrics.discordClosed,
+    assigned: assignedBreakdown.pylon,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
