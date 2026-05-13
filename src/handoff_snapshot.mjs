@@ -827,11 +827,19 @@ function getShiftLead(slot, nowPt) {
   if (anchor) {
     const anchorIdx = roster.indexOf(anchor.name);
     if (anchorIdx !== -1) {
-      const monthsElapsed = (nowPt.year - anchor.year) * 12 + (nowPt.month - anchor.month);
-      const idx = ((anchorIdx + monthsElapsed) % roster.length + roster.length) % roster.length;
-      return roster[idx];
+      if (
+        Number.isFinite(anchor.year) &&
+        Number.isFinite(anchor.month) &&
+        anchor.month >= 1 && anchor.month <= 12
+      ) {
+        const monthsElapsed = (nowPt.year - anchor.year) * 12 + (nowPt.month - anchor.month);
+        const idx = ((anchorIdx + monthsElapsed) % roster.length + roster.length) % roster.length;
+        return roster[idx];
+      }
+      console.warn(`[ROSTER] shift_lead_anchor for ${slot} has invalid year/month; falling back.`);
+    } else {
+      console.warn(`[ROSTER] shift_lead_anchor name "${anchor.name}" not found in ${slot} roster; falling back.`);
     }
-    console.warn(`[ROSTER] shift_lead_anchor name "${anchor.name}" not found in ${slot} roster; falling back.`);
   }
 
   // Fallback: simple month % length (fragile to roster size changes)
