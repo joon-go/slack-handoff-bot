@@ -137,6 +137,7 @@ function loadRosters() {
       emea: Array.isArray(parsed.emea) ? parsed.emea : DEFAULT_ROSTERS.emea,
       apac: Array.isArray(parsed.apac) ? parsed.apac : DEFAULT_ROSTERS.apac,
       us: Array.isArray(parsed.us) ? parsed.us : DEFAULT_ROSTERS.us,
+      shift_lead_roster: parsed.shift_lead_roster ?? {},
       shift_lead_anchor: parsed.shift_lead_anchor ?? null,
     };
   } catch (err) {
@@ -815,7 +816,13 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
  *   Jul 2026  → 2 months elapsed → index 0 → Saurabh
  */
 function getShiftLead(slot, nowPt) {
-  const roster = REGION_ROSTERS[slot] || [];
+  // Use shift_lead_roster[slot] if defined (e.g. to exclude members who cover
+  // multiple regions from leading both simultaneously). Falls back to main roster.
+  const leadRoster =
+    (REGION_ROSTERS.shift_lead_roster?.[slot]?.length > 0
+      ? REGION_ROSTERS.shift_lead_roster[slot]
+      : null) ?? REGION_ROSTERS[slot] ?? [];
+  const roster = leadRoster;
   if (roster.length === 0) return "TBD";
 
   const anchor = REGION_ROSTERS.shift_lead_anchor?.[slot];
