@@ -133,11 +133,28 @@ function loadRosters() {
     const raw = readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw);
     console.log(`[CONFIG] Loaded rosters from ${configPath}`);
+
+    // Normalize shift_lead_roster: ensure each slot value is an array
+    const shiftLeadRoster = {};
+    if (parsed.shift_lead_roster && typeof parsed.shift_lead_roster === 'object') {
+      for (const [slot, value] of Object.entries(parsed.shift_lead_roster)) {
+        if (Array.isArray(value)) {
+          shiftLeadRoster[slot] = value;
+        } else if (value != null) {
+          // Wrap non-null, non-array values in an array
+          shiftLeadRoster[slot] = [value];
+        } else {
+          // null/undefined becomes empty array
+          shiftLeadRoster[slot] = [];
+        }
+      }
+    }
+
     return {
       emea: Array.isArray(parsed.emea) ? parsed.emea : DEFAULT_ROSTERS.emea,
       apac: Array.isArray(parsed.apac) ? parsed.apac : DEFAULT_ROSTERS.apac,
       us: Array.isArray(parsed.us) ? parsed.us : DEFAULT_ROSTERS.us,
-      shift_lead_roster: parsed.shift_lead_roster ?? {},
+      shift_lead_roster: shiftLeadRoster,
       shift_lead_anchor: parsed.shift_lead_anchor ?? null,
     };
   } catch (err) {
@@ -818,10 +835,11 @@ function buildSlaBreachedLines(list, assigneeIdToName) {
 function getShiftLead(slot, nowPt) {
   // Use shift_lead_roster[slot] if defined (e.g. to exclude members who cover
   // multiple regions from leading both simultaneously). Falls back to main roster.
+  const shiftLeadValue = REGION_ROSTERS.shift_lead_roster?.[slot];
   const leadRoster =
-    (REGION_ROSTERS.shift_lead_roster?.[slot]?.length > 0
-      ? REGION_ROSTERS.shift_lead_roster[slot]
-      : null) ?? REGION_ROSTERS[slot] ?? [];
+    (Array.isArray(shiftLeadValue) && shiftLeadValue.length > 0
+      ? shiftLeadValue
+      : null) ?? (Array.isArray(REGION_ROSTERS[slot]) ? REGION_ROSTERS[slot] : []);
   const roster = leadRoster;
   if (roster.length === 0) return "TBD";
 
