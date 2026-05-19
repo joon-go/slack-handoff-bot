@@ -1,7 +1,7 @@
 {
-  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "David Chau"],
+  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
   "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie"],
-  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"],
+  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry", "David Chau"],
   "shift_lead_roster": {},
   "shift_lead_anchor": {
     "us":   { "name": "Tassia Shibuya",   "year": 2026, "month": 5 },
