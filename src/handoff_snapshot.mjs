@@ -31,7 +31,8 @@
  *     US:   09:00 -> 18:00
  *     EMEA: 01:00 -> 10:00
  *     APAC: 18:00 -> 03:00 (cross-midnight)
- * - "New tickets during <REGION>" counts issues created in that window (open + closed), team L1+L2 only.
+ * - "New tickets during <REGION>" counts issues created in that window with state=new, team L1+L2 only.
+ *     Tickets already responded to (by a human or AI bot) are excluded — their state moves past "new".
  * - Under New tickets line, prints assignment breakdown for the shift roster:
  *     Assigned: Name: N | Name: N | ...
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
@@ -1005,8 +1006,10 @@ ${newTicketsAssignedPylonBreakdown}
  *  ---------------------------- */
 
 /**
- * Pass A: collect tickets created during the shift window (open + closed)
- * Counts ONLY those currently assigned to L1+L2 team.
+ * Pass A: collect tickets created during the shift window with state=new.
+ * Counts ONLY those currently on L1+L2 team and still in "new" state.
+ * Tickets already responded to (state moved past "new") are excluded — this prevents
+ * AI-bot-handled tickets and quickly-resolved tickets from inflating the count.
  * We can safely stop paging once oldest created_at < startUtc.
  */
 async function scanCreatedDuringShift({ slot, pylonToken }) {
@@ -1036,6 +1039,10 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 
       // Skip spam-tagged issues — they inflate the new-ticket count misleadingly
       if (isSpam(issue)) { spamSkipped++; continue; }
+
+      // Only count tickets still in "new" state — tickets the AI bot or a human
+      // already responded to are no longer "new" and should not inflate the count.
+      if (issue.state !== "new") continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
