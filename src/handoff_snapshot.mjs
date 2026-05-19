@@ -943,7 +943,8 @@ function buildSlackHandoffMessage({
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
 *New tickets during ${region}:* ${newTicketsDuringShiftCount}
-*Assigned:* ${newTicketsAssignedPylonBreakdown}
+*Assigned:*
+${newTicketsAssignedPylonBreakdown}
 🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
 
   if (entFrPending > 0 && entFrPendingLines) {
@@ -1525,14 +1526,16 @@ async function main() {
 
   // Pass A: created during shift (can early-stop safely)
   const created = await scanCreatedDuringShift({ slot, pylonToken });
-  // Assigned breakdown for the roster (split by source)
-  const assignedBreakdown = formatAssignedBreakdownForShift(
-    slot,
-    created.issues,
-    assigneeIdToName
-  );
   const newTicketsDuringShiftCount = created.issues.length;
   const shiftLead = getShiftLead(slot, ptNow());
+
+  // Assigned breakdown — show all three regions so viewers get the full picture
+  // at handoff time regardless of which shift is reporting.
+  const apacBreakdown = formatAssignedBreakdownForShift("apac", created.issues, assigneeIdToName);
+  const emeaBreakdown = formatAssignedBreakdownForShift("emea", created.issues, assigneeIdToName);
+  const usBreakdown   = formatAssignedBreakdownForShift("us",   created.issues, assigneeIdToName);
+  const allRegionsBreakdown =
+    `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
 
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
@@ -1546,7 +1549,7 @@ async function main() {
     shiftLead,
     datePt,
     newTicketsDuringShiftCount,
-    newTicketsAssignedPylonBreakdown: assignedBreakdown.pylon,
+    newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
     frP0P1: metrics.frP0P1,
@@ -1569,7 +1572,9 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assigned: assignedBreakdown.pylon,
+    assignedApac: apacBreakdown.pylon,
+    assignedEmea: emeaBreakdown.pylon,
+    assignedUs: usBreakdown.pylon,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
