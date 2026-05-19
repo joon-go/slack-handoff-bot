@@ -917,6 +917,7 @@ function buildSlackHandoffMessage({
   shiftLead,
   datePt,
   newTicketsDuringShiftCount,
+  unassignedLine,
   newTicketsAssignedPylonBreakdown,
   entFrPending,
   entFrPendingLines,
@@ -949,8 +950,14 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount}
-*Assigned:*
+*New tickets during ${region}:* ${newTicketsDuringShiftCount}`;
+
+  if (unassignedLine) {
+    msg += `\n*Unassigned:* ${unassignedLine}`;
+  }
+
+  msg +=
+`\n*Assigned:*
 ${newTicketsAssignedPylonBreakdown}
 🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
 
@@ -1548,6 +1555,24 @@ async function main() {
   const allRegionsBreakdown =
     `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
 
+  // Unassigned: tickets with no assignee OR assigned to someone not on any region roster.
+  // These cause a gap between the total count and the per-roster breakdown, so we surface
+  // them explicitly so they don't go unnoticed at handoff time.
+  const allRosterNames = new Set([
+    ...(REGION_ROSTERS.apac || []),
+    ...(REGION_ROSTERS.emea || []),
+    ...(REGION_ROSTERS.us  || []),
+  ]);
+  const unassignedIssues = created.issues.filter(issue => {
+    const assigneeId = issue?.assignee?.id;
+    if (!assigneeId) return true;
+    const name = assigneeIdToName[assigneeId];
+    return !name || !allRosterNames.has(name);
+  });
+  const unassignedLine = unassignedIssues.length > 0
+    ? unassignedIssues.map(i => `<${pylonIssueUrl(i.id)}|#${i.number}>`).join(" | ")
+    : "";
+
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
 
@@ -1560,6 +1585,7 @@ async function main() {
     shiftLead,
     datePt,
     newTicketsDuringShiftCount,
+    unassignedLine,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
