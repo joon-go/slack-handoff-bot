@@ -31,7 +31,8 @@
  *     US:   09:00 -> 18:00
  *     EMEA: 01:00 -> 10:00
  *     APAC: 18:00 -> 03:00 (cross-midnight)
- * - "New tickets during <REGION>" counts issues created in that window (open + closed), team L1+L2 only.
+ * - "New tickets during <REGION>" counts issues created in that window with state=new, team L1+L2 only.
+ *     Tickets already responded to (by a human or AI bot) are excluded — their state moves past "new".
  * - Under New tickets line, prints assignment breakdown for the shift roster:
  *     Assigned: Name: N | Name: N | ...
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
@@ -60,6 +61,7 @@ const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 
 // Team "L1+L2" (enforced locally)
 const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
+
 
 // Custom field slugs
 const CF_HANDOFF_REGION = "hand_off_region"; // single-select
@@ -910,6 +912,7 @@ function buildSlackHandoffMessage({
   shiftLead,
   datePt,
   newTicketsDuringShiftCount,
+  unassignedLine,
   newTicketsAssignedPylonBreakdown,
   entFrPending,
   entFrPendingLines,
@@ -942,8 +945,14 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount}
-*Assigned:*
+*New tickets during ${region}:* ${newTicketsDuringShiftCount}`;
+
+  if (unassignedLine) {
+    msg += `\n*Unassigned:* ${unassignedLine}`;
+  }
+
+  msg +=
+`\n*Assigned:*
 ${newTicketsAssignedPylonBreakdown}
 🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
 
@@ -991,8 +1000,10 @@ ${newTicketsAssignedPylonBreakdown}
  *  ---------------------------- */
 
 /**
- * Pass A: collect tickets created during the shift window (open + closed)
- * Counts ONLY those currently assigned to L1+L2 team.
+ * Pass A: collect tickets created during the shift window with state=new.
+ * Counts ONLY those currently on L1+L2 team and still in "new" state.
+ * Tickets already responded to (state moved past "new") are excluded — this prevents
+ * AI-bot-handled tickets and quickly-resolved tickets from inflating the count.
  * We can safely stop paging once oldest created_at < startUtc.
  */
 async function scanCreatedDuringShift({ slot, pylonToken }) {
@@ -1018,6 +1029,10 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 
       // ✅ only L1+L2 (team null excluded)
       if (!isTeamL1L2(issue)) continue;
+
+      // Only count tickets still in "new" state — tickets the AI bot or a human
+      // already responded to are no longer "new" and should not inflate the count.
+      if (issue.state !== "new") continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
@@ -1537,6 +1552,24 @@ async function main() {
   const allRegionsBreakdown =
     `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
 
+  // Unassigned: tickets with no assignee OR assigned to someone not on any region roster.
+  // These cause a gap between the total count and the per-roster breakdown, so we surface
+  // them explicitly so they don't go unnoticed at handoff time.
+  const allRosterNames = new Set([
+    ...(REGION_ROSTERS.apac || []),
+    ...(REGION_ROSTERS.emea || []),
+    ...(REGION_ROSTERS.us  || []),
+  ]);
+  const unassignedIssues = created.issues.filter(issue => {
+    const assigneeId = issue?.assignee?.id;
+    if (!assigneeId) return true;
+    const name = assigneeIdToName[assigneeId];
+    return !name || !allRosterNames.has(name);
+  });
+  const unassignedLine = unassignedIssues.length > 0
+    ? unassignedIssues.map(i => `<${pylonIssueUrl(i.id)}|#${i.number}>`).join(" | ")
+    : "";
+
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
 
@@ -1549,6 +1582,7 @@ async function main() {
     shiftLead,
     datePt,
     newTicketsDuringShiftCount,
+    unassignedLine,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
