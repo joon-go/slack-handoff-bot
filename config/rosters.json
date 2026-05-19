@@ -1,7 +1,7 @@
 {
-  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
+  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "David Chau"],
   "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie"],
-  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry", "Stacie"],
+  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry", "Stacie", "David Chau"],
   "shift_lead_roster": {
     "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"]
   },
