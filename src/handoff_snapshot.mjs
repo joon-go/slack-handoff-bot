@@ -61,6 +61,9 @@ const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 // Team "L1+L2" (enforced locally)
 const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
 
+// Issues tagged with this are excluded from new-ticket counts (spam filter)
+const SPAM_TAG = "spam";
+
 // Custom field slugs
 const CF_HANDOFF_REGION = "hand_off_region"; // single-select
 const CF_MEETING_REQUIRED = "handoff_call_required";
@@ -308,6 +311,10 @@ function priorityRank(pLabel) {
 
 function isTeamL1L2(issue) {
   return issue?.team?.id === TEAM_ID_L1_L2;
+}
+
+function isSpam(issue) {
+  return Array.isArray(issue?.tags) && issue.tags.includes(SPAM_TAG);
 }
 
 function isOpenState(issue) {
@@ -1013,11 +1020,15 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
+    let spamSkipped = 0;
     for (const issue of data) {
       if (!issue?.id) continue;
 
       // ✅ only L1+L2 (team null excluded)
       if (!isTeamL1L2(issue)) continue;
+
+      // Skip spam-tagged issues — they inflate the new-ticket count misleadingly
+      if (isSpam(issue)) { spamSkipped++; continue; }
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
@@ -1037,7 +1048,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size}`
+      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} spamSkipped=${spamSkipped}`
     );
 
     if (!hasNext || !nextCursor) break;
