@@ -1027,6 +1027,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
+    let botSkipped = 0;
     for (const issue of data) {
       if (!issue?.id) continue;
 
@@ -1034,7 +1035,11 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
       if (!isTeamL1L2(issue)) continue;
 
       // Exclude tickets handled by the AI support bot
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) continue;
+      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+        console.log(`[SCAN-A] bot-skip issue=${issue.id} number=${issue.number} assignee=${issue.assignee.id}`);
+        botSkipped++;
+        continue;
+      }
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
@@ -1054,7 +1059,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size}`
+      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} botSkipped=${botSkipped}`
     );
 
     if (!hasNext || !nextCursor) break;
