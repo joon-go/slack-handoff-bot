@@ -31,8 +31,8 @@
  *     US:   09:00 -> 18:00
  *     EMEA: 01:00 -> 10:00
  *     APAC: 18:00 -> 03:00 (cross-midnight)
- * - "New tickets during <REGION>" counts issues created in that window with state=new, team L1+L2 only.
- *     Tickets already responded to (by a human or AI bot) are excluded — their state moves past "new".
+ * - "New tickets during <REGION>" counts issues created in that window (all states), team L1+L2 only.
+ *     Tickets already responded to move to waiting_on_you but are still counted — they came in that shift.
  * - Under New tickets line, prints assignment breakdown for the shift roster:
  *     Assigned: Name: N | Name: N | ...
  * - FR SLA Pending buckets are state === "new" (team L1+L2 only):
@@ -61,6 +61,9 @@ const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 
 // Team "L1+L2" (enforced locally)
 const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
+
+// Bot user excluded from new-ticket counts
+const AI_SUPPORT_AGENT_ID = "22f64934-056c-4353-83cd-9c3cad8cfa3b";
 
 
 // Custom field slugs
@@ -1000,10 +1003,10 @@ ${newTicketsAssignedPylonBreakdown}
  *  ---------------------------- */
 
 /**
- * Pass A: collect tickets created during the shift window with state=new.
- * Counts ONLY those currently on L1+L2 team and still in "new" state.
- * Tickets already responded to (state moved past "new") are excluded — this prevents
- * AI-bot-handled tickets and quickly-resolved tickets from inflating the count.
+ * Pass A: collect tickets created during the shift window (all states).
+ * Counts ONLY those currently on L1+L2 team.
+ * Tickets responded to by an agent move to waiting_on_you — they are still
+ * counted as new tickets for that shift.
  * We can safely stop paging once oldest created_at < startUtc.
  */
 async function scanCreatedDuringShift({ slot, pylonToken }) {
@@ -1030,9 +1033,8 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
       // ✅ only L1+L2 (team null excluded)
       if (!isTeamL1L2(issue)) continue;
 
-      // Only count tickets still in "new" state — tickets the AI bot or a human
-      // already responded to are no longer "new" and should not inflate the count.
-      if (issue.state !== "new") continue;
+      // Exclude tickets handled by the AI support bot
+      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
