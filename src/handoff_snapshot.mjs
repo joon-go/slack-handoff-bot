@@ -1027,17 +1027,24 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
+    let botSkipped = 0;
     for (const issue of data) {
       if (!issue?.id) continue;
 
       // ✅ only L1+L2 (team null excluded)
       if (!isTeamL1L2(issue)) continue;
 
-      // Exclude tickets handled by the AI support bot
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) continue;
-
       const createdAtUtc = parseUtcIso(issue.created_at);
-      if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
+      const createdInShift = createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc;
+
+      // Exclude tickets handled by the AI support bot (only count those created in shift)
+      if (createdInShift && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+        console.log(`[SCAN-A] bot-skip issue=${issue.id} number=${issue.number} assignee=${issue.assignee.id}`);
+        botSkipped++;
+        continue;
+      }
+
+      if (createdInShift) {
         if (!createdIds.has(issue.id)) {
           createdIds.add(issue.id);
           createdIssues.push(issue);
@@ -1054,7 +1061,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size}`
+      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} botSkipped=${botSkipped}`
     );
 
     if (!hasNext || !nextCursor) break;
