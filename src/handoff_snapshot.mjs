@@ -915,6 +915,8 @@ function buildSlackHandoffMessage({
   shiftLead,
   datePt,
   newTicketsDuringShiftCount,
+  aiAgentCount,
+  humanAgentCount,
   unassignedLine,
   newTicketsAssignedPylonBreakdown,
   entFrPending,
@@ -948,7 +950,8 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount}`;
+*New tickets during ${region}:* ${newTicketsDuringShiftCount}
+AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
 
   if (unassignedLine) {
     msg += `\n*Unassigned:* ${unassignedLine}`;
@@ -1014,7 +1017,8 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
 
   const createdIds = new Set();
-  const createdIssues = [];
+  const createdIssues = []; // human-assigned only (for roster breakdown)
+  let aiTicketCount = 0;
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1027,7 +1031,6 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
-    let botSkipped = 0;
     for (const issue of data) {
       if (!issue?.id) continue;
 
@@ -1035,20 +1038,18 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
       if (!isTeamL1L2(issue)) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
-      const createdInShift = createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc;
+      if (!(createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc)) continue;
+      if (createdIds.has(issue.id)) continue;
 
-      // Exclude tickets handled by the AI support bot (only count those created in shift)
-      if (createdInShift && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
-        console.log(`[SCAN-A] bot-skip issue=${issue.id} number=${issue.number} assignee=${issue.assignee.id}`);
-        botSkipped++;
-        continue;
-      }
+      createdIds.add(issue.id);
 
-      if (createdInShift) {
-        if (!createdIds.has(issue.id)) {
-          createdIds.add(issue.id);
-          createdIssues.push(issue);
-        }
+      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+        // Count AI-handled tickets in the total but keep them out of the
+        // human roster breakdown (Assigned: block).
+        console.log(`[SCAN-A] ai-agent issue=${issue.id} number=${issue.number}`);
+        aiTicketCount++;
+      } else {
+        createdIssues.push(issue);
       }
     }
 
@@ -1061,7 +1062,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} botSkipped=${botSkipped}`
+      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} aiAgent=${aiTicketCount}`
     );
 
     if (!hasNext || !nextCursor) break;
@@ -1084,7 +1085,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     await sleep(200);
   }
 
-  return { count: createdIds.size, issues: createdIssues };
+  return { count: createdIds.size, issues: createdIssues, aiCount: aiTicketCount };
 }
 
 /**
@@ -1550,7 +1551,9 @@ async function main() {
 
   // Pass A: created during shift (can early-stop safely)
   const created = await scanCreatedDuringShift({ slot, pylonToken });
-  const newTicketsDuringShiftCount = created.issues.length;
+  const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
+  const humanAgentCount = created.issues.length;
+  const aiAgentCount = created.aiCount;
   const shiftLead = getShiftLead(slot, ptNow());
 
   // Assigned breakdown — show all three regions so viewers get the full picture
@@ -1591,6 +1594,8 @@ async function main() {
     shiftLead,
     datePt,
     newTicketsDuringShiftCount,
+    aiAgentCount,
+    humanAgentCount,
     unassignedLine,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
