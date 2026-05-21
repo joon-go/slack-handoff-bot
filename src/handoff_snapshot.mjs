@@ -1034,15 +1034,17 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
       // ✅ only L1+L2 (team null excluded)
       if (!isTeamL1L2(issue)) continue;
 
-      // Exclude tickets handled by the AI support bot
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+      const createdAtUtc = parseUtcIso(issue.created_at);
+      const createdInShift = createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc;
+
+      // Exclude tickets handled by the AI support bot (only count those created in shift)
+      if (createdInShift && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
         console.log(`[SCAN-A] bot-skip issue=${issue.id} number=${issue.number} assignee=${issue.assignee.id}`);
         botSkipped++;
         continue;
       }
 
-      const createdAtUtc = parseUtcIso(issue.created_at);
-      if (createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc) {
+      if (createdInShift) {
         if (!createdIds.has(issue.id)) {
           createdIds.add(issue.id);
           createdIssues.push(issue);
