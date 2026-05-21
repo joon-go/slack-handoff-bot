@@ -950,7 +950,7 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount} total
+*New tickets during ${region}:* ${newTicketsDuringShiftCount}
 AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
 
   if (unassignedLine) {
