@@ -16,7 +16,7 @@
  *
  * Optional Env:
  *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
- *   SCAN_B_LOOKBACK_DAYS=30               # override the SCAN-B lookback window (default 30)
+ *   SCAN_B_LOOKBACK_DAYS=90               # override the SCAN-B lookback window (default 90)
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
  *   PYLON_MESSAGES_DELAY_MS=500           # delay between message API calls (default 500ms)
  *
@@ -1227,7 +1227,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * - FR SLA Pending P2/P3 (state=new + medium/low)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  *
- * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 30).
+ * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 90).
  * Waiting-on-support is handled separately by scanWaitingOnSupport()
  * using server-side state filter for performance.
  *
@@ -1239,7 +1239,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
   const nowPt = ptNow();
 
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
+  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
   const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
 
   const ids = {
@@ -1736,7 +1736,7 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
+  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
   const conversionTimes = await fetchTicketConversionTimes({
     pylonToken,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
