@@ -631,16 +631,15 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
  * Filter: action = "Issue Made Into Ticket" && action_happened_at >= cutoff
  */
 async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
-  const cutoffIso = DateTime.now()
-    .minus({ days: lookbackDays })
-    .toUTC()
-    .toISO();
+  // Pylon audit-log API only accepts a single flat filter (no conjunctions).
+  // Filter by action server-side; apply time cutoff client-side with early-stop.
+  const cutoffDt = DateTime.now().minus({ days: lookbackDays }).toUTC();
 
   const conversionMap = new Map(); // issueId -> actionHappenedAtIso
   let cursor = null;
   const seenCursors = new Set();
   let page = 0;
-  const MAX_PAGES = 50; // safety cap — audit log only needed for enterprise issues
+  const MAX_PAGES = 50; // safety cap — ticket conversions are infrequent
   const maxAttempts = 5;
 
   while (true) {
@@ -648,13 +647,7 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
 
     const body = {
       limit: 200,
-      filter: {
-        conjunction: "AND",
-        filters: [
-          { field: "action",             operator: "equals",        value: "Issue Made Into Ticket" },
-          { field: "action_happened_at", operator: "time_is_after", value: cutoffIso },
-        ],
-      },
+      filter: { field: "action", operator: "equals", value: "Issue Made Into Ticket" },
     };
     if (cursor) body.cursor = cursor;
 
@@ -675,7 +668,8 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
 
       if (res.status === 429) {
         if (attempt >= maxAttempts) {
-          throw new Error(`[AUDIT-LOG] 429 retries exhausted on page ${page}`);
+          console.warn(`[AUDIT-LOG] 429 after ${maxAttempts} attempts on page ${page}; skipping audit-log fetch.`);
+          return conversionMap;
         }
         const retryAfterHeader = res.headers.get("retry-after");
         const retryAfterMs = retryAfterHeader
@@ -689,21 +683,32 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
       try {
         json = JSON.parse(text);
       } catch {
-        throw new Error(`[AUDIT-LOG] Non-JSON response on page ${page}, attempt ${attempt}: ${text.slice(0, 200)}`);
+        console.warn(`[AUDIT-LOG] Non-JSON response (${res.status}) on page ${page}: ${text.slice(0, 200)}`);
+        return conversionMap;
       }
 
       if (!res.ok) {
-        throw new Error(`[AUDIT-LOG] HTTP ${res.status} on page ${page}: ${JSON.stringify(json).slice(0, 200)}`);
+        console.warn(`[AUDIT-LOG] /audit-logs/search failed (${res.status}) on page ${page}: ${JSON.stringify(json).slice(0, 200)}`);
+        return conversionMap;
       }
       break;
     }
 
     const events = Array.isArray(json?.data) ? json.data : [];
+    let reachedCutoff = false;
 
     for (const event of events) {
       const issueId = event?.object_id;
       const happenedAt = event?.action_happened_at;
       if (!issueId || !happenedAt) continue;
+
+      // Client-side time cutoff — skip events older than lookback window
+      const eventDt = DateTime.fromISO(happenedAt, { zone: "utc" });
+      if (eventDt < cutoffDt) {
+        reachedCutoff = true;
+        continue;
+      }
+
       // Keep the earliest conversion timestamp (edge case: converted twice)
       if (!conversionMap.has(issueId) || happenedAt < conversionMap.get(issueId)) {
         conversionMap.set(issueId, happenedAt);
@@ -718,6 +723,10 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
     );
 
     if (!hasNext || !nextCursor) break;
+    if (reachedCutoff) {
+      console.log(`[AUDIT-LOG] Reached lookback cutoff; stopping pagination.`);
+      break;
+    }
 
     if (seenCursors.has(nextCursor)) {
       console.warn(`[AUDIT-LOG] cursor repeated; stopping.`);
