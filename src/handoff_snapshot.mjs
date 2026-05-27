@@ -675,8 +675,7 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
 
       if (res.status === 429) {
         if (attempt >= maxAttempts) {
-          console.warn(`[AUDIT-LOG] 429 after ${maxAttempts} attempts on page ${page}; aborting audit-log fetch.`);
-          return conversionMap;
+          throw new Error(`[AUDIT-LOG] 429 retries exhausted on page ${page}`);
         }
         const retryAfterHeader = res.headers.get("retry-after");
         const retryAfterMs = retryAfterHeader
@@ -690,13 +689,11 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
       try {
         json = JSON.parse(text);
       } catch {
-        console.warn(`[AUDIT-LOG] Non-JSON response (${res.status}): ${text.slice(0, 200)}`);
-        return conversionMap;
+        throw new Error(`[AUDIT-LOG] Non-JSON response on page ${page}, attempt ${attempt}: ${text.slice(0, 200)}`);
       }
 
       if (!res.ok) {
-        console.warn(`[AUDIT-LOG] /audit-logs/search failed (${res.status}): ${JSON.stringify(json).slice(0, 200)}`);
-        return conversionMap;
+        throw new Error(`[AUDIT-LOG] HTTP ${res.status} on page ${page}: ${JSON.stringify(json).slice(0, 200)}`);
       }
       break;
     }
@@ -1398,8 +1395,13 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     if (!hasNext || !nextCursor) break;
 
     // Early-stop at lookback cutoff
+    // Use conversionTimes for enterprise issues when available, else issue.created_at
     const oldestCreatedUtc = data
-      .map((i) => parseUtcIso(i.created_at))
+      .map((i) => {
+        if (!i?.id || !i?.created_at) return null;
+        const effectiveStart = conversionTimes?.get(i.id) ?? i.created_at;
+        return parseUtcIso(effectiveStart);
+      })
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
