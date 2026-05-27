@@ -618,6 +618,127 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
 }
 
 /**
+ * Fetch all "Issue Made Into Ticket" audit-log events within `lookbackDays`.
+ *
+ * Returns a Map<issueId, actionHappenedAtIso> so that scanQueueMetrics can
+ * use the conversion timestamp as the SLA clock start for enterprise issues
+ * that were originally created as conversations and later converted.
+ *
+ * This is cheap: audit-log events for ticket conversions are infrequent, so
+ * we expect at most a few pages even with a 30-day lookback window.
+ *
+ * API: POST https://api.usepylon.com/audit-logs/search
+ * Filter: action = "Issue Made Into Ticket" && action_happened_at >= cutoff
+ */
+async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
+  const cutoffIso = DateTime.now()
+    .minus({ days: lookbackDays })
+    .toUTC()
+    .toISO();
+
+  const conversionMap = new Map(); // issueId -> actionHappenedAtIso
+  let cursor = null;
+  const seenCursors = new Set();
+  let page = 0;
+  const MAX_PAGES = 50; // safety cap — audit log only needed for enterprise issues
+  const maxAttempts = 5;
+
+  while (true) {
+    page += 1;
+
+    const body = {
+      limit: 200,
+      filter: {
+        conjunction: "AND",
+        filters: [
+          { field: "action",             operator: "equals",        value: "Issue Made Into Ticket" },
+          { field: "action_happened_at", operator: "time_is_after", value: cutoffIso },
+        ],
+      },
+    };
+    if (cursor) body.cursor = cursor;
+
+    let attempt = 0;
+    let json;
+
+    while (true) {
+      attempt += 1;
+      const res = await fetch(`${PYLON_API_BASE}/audit-logs/search`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${pylonToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 429) {
+        if (attempt >= maxAttempts) {
+          throw new Error(`[AUDIT-LOG] 429 retries exhausted on page ${page}`);
+        }
+        const retryAfterHeader = res.headers.get("retry-after");
+        const retryAfterMs = retryAfterHeader
+          ? Number(retryAfterHeader) * 1000
+          : Math.min(30000, 750 * 2 ** (attempt - 1));
+        await sleep(retryAfterMs);
+        continue;
+      }
+
+      const text = await res.text();
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error(`[AUDIT-LOG] Non-JSON response on page ${page}, attempt ${attempt}: ${text.slice(0, 200)}`);
+      }
+
+      if (!res.ok) {
+        throw new Error(`[AUDIT-LOG] HTTP ${res.status} on page ${page}: ${JSON.stringify(json).slice(0, 200)}`);
+      }
+      break;
+    }
+
+    const events = Array.isArray(json?.data) ? json.data : [];
+
+    for (const event of events) {
+      const issueId = event?.object_id;
+      const happenedAt = event?.action_happened_at;
+      if (!issueId || !happenedAt) continue;
+      // Keep the earliest conversion timestamp (edge case: converted twice)
+      if (!conversionMap.has(issueId) || happenedAt < conversionMap.get(issueId)) {
+        conversionMap.set(issueId, happenedAt);
+      }
+    }
+
+    const hasNext = json?.pagination?.has_next_page === true;
+    const nextCursor = json?.pagination?.cursor ?? null;
+
+    console.log(
+      `[AUDIT-LOG] page=${page} fetched=${events.length} conversions_found=${conversionMap.size}`
+    );
+
+    if (!hasNext || !nextCursor) break;
+
+    if (seenCursors.has(nextCursor)) {
+      console.warn(`[AUDIT-LOG] cursor repeated; stopping.`);
+      break;
+    }
+    seenCursors.add(nextCursor);
+
+    if (page >= MAX_PAGES) {
+      console.warn(`[AUDIT-LOG] hit MAX_PAGES=${MAX_PAGES}; stopping.`);
+      break;
+    }
+
+    cursor = nextCursor;
+    await sleep(200);
+  }
+
+  console.log(`[AUDIT-LOG] Done. ${conversionMap.size} ticket conversion timestamps loaded.`);
+  return conversionMap;
+}
+
+/**
  * Fetch all users:
  * - Build id -> name map (used for display)
  * - Build name -> id map (used for roster matching)
@@ -1097,8 +1218,13 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 30).
  * Waiting-on-support is handled separately by scanWaitingOnSupport()
  * using server-side state filter for performance.
+ *
+ * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
+ *   For enterprise issues that were originally conversations, the SLA clock starts at
+ *   the conversion timestamp rather than issue.created_at.  Non-enterprise issues and
+ *   enterprise issues with no conversion record continue to use created_at.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
   const nowPt = ptNow();
 
   const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
@@ -1182,13 +1308,18 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
         }
 
-        // FRT SLA breach: check tier × priority threshold
+        // FRT SLA breach: check tier × priority threshold.
+        // For enterprise issues, use the audit-log conversion timestamp if available
+        // (issue was originally a conversation; SLA clock starts at conversion time).
         if (prioRaw && issue.created_at) {
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
           if (slaSeconds !== null) {
             const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
-            const elapsed = elapsedSeconds(issue.created_at, nowPt, coverage);
+            const slaStartIso = isEnterpriseTier(tier)
+              ? (conversionTimes?.get(issue.id) ?? issue.created_at)
+              : issue.created_at;
+            const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
             if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
               ids.slaBreached.add(issue.id);
               slaBreachedDetails.set(issue.id, {
@@ -1205,14 +1336,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
           }
         }
 
-        // Enterprise FR Pending: track all enterprise/elite new issues not yet breached
+        // Enterprise FR Pending: track all enterprise/elite new issues not yet breached.
+        // Use audit-log conversion timestamp (if present) as the SLA clock start.
         if (isEnterpriseTier(tier) && prioRaw && !entFrPendingDetails.has(issue.id)) {
           const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
           const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
           const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
+          const slaStartIso = conversionTimes?.get(issue.id) ?? issue.created_at;
           let timeRemaining = null;
-          if (slaSeconds !== null && issue.created_at) {
-            const elapsed = elapsedSeconds(issue.created_at, nowPt, coverage);
+          if (slaSeconds !== null && slaStartIso) {
+            const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
             timeRemaining = slaSeconds - elapsed;
           }
           if (timeRemaining === null || timeRemaining >= 0) {
@@ -1262,8 +1395,13 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName }) {
     if (!hasNext || !nextCursor) break;
 
     // Early-stop at lookback cutoff
+    // Use conversionTimes for enterprise issues when available, else issue.created_at
     const oldestCreatedUtc = data
-      .map((i) => parseUtcIso(i.created_at))
+      .map((i) => {
+        if (!i?.id || !i?.created_at) return null;
+        const effectiveStart = conversionTimes?.get(i.id) ?? i.created_at;
+        return parseUtcIso(effectiveStart);
+      })
       .filter(Boolean)
       .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
 
@@ -1582,8 +1720,18 @@ async function main() {
     ? unassignedIssues.map(i => `<${pylonIssueUrl(i.id)}|#${i.number}>`).join(" | ")
     : "";
 
+  // Fetch audit-log ticket conversion timestamps for enterprise SLA clock correction.
+  // Enterprise issues that started as conversations have created_at = conversation start,
+  // which over-counts SLA elapsed time.  The audit log records when someone clicked
+  // "Make into ticket", which is the correct SLA start time.
+  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
+  const conversionTimes = await fetchTicketConversionTimes({
+    pylonToken,
+    lookbackDays: LOOKBACK_DAYS_SCAN_B,
+  });
+
   // Pass B: queue metrics + open handoff (lookback-bounded scan)
-  const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName });
+  const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes });
 
   // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
   const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
@@ -1626,6 +1774,7 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
+    enterpriseConversionTimestampsLoaded: conversionTimes.size,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
     handoffIssues: metrics.handoffIssues,
