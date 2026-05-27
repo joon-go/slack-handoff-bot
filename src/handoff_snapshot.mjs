@@ -695,19 +695,20 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
     }
 
     const events = Array.isArray(json?.data) ? json.data : [];
-    let reachedCutoff = false;
+    let inWindowCount = 0;
 
     for (const event of events) {
       const issueId = event?.object_id;
       const happenedAt = event?.action_happened_at;
       if (!issueId || !happenedAt) continue;
 
-      // Client-side time cutoff — skip events older than lookback window
+      // Client-side time cutoff — skip events older than lookback window but
+      // keep iterating: events may not be strictly ordered, so there can be
+      // in-window events later on the same page.
       const eventDt = DateTime.fromISO(happenedAt, { zone: "utc" });
-      if (eventDt < cutoffDt) {
-        reachedCutoff = true;
-        continue;
-      }
+      if (eventDt < cutoffDt) continue;
+
+      inWindowCount++;
 
       // Keep the earliest conversion timestamp (edge case: converted twice)
       if (!conversionMap.has(issueId) || happenedAt < conversionMap.get(issueId)) {
@@ -719,12 +720,14 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
     const nextCursor = json?.pagination?.cursor ?? null;
 
     console.log(
-      `[AUDIT-LOG] page=${page} fetched=${events.length} conversions_found=${conversionMap.size}`
+      `[AUDIT-LOG] page=${page} fetched=${events.length} in_window=${inWindowCount} conversions_found=${conversionMap.size}`
     );
 
     if (!hasNext || !nextCursor) break;
-    if (reachedCutoff) {
-      console.log(`[AUDIT-LOG] Reached lookback cutoff; stopping pagination.`);
+    // Stop only when an entire page had no in-window events — means we've
+    // paged past the lookback window on all results.
+    if (events.length > 0 && inWindowCount === 0) {
+      console.log(`[AUDIT-LOG] Full page had no in-window events; stopping pagination.`);
       break;
     }
 
