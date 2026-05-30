@@ -1058,7 +1058,6 @@ function buildSlackHandoffMessage({
   slaBreached,
   p0p1IssueLines,
   slaBreachedLines,
-  aiAgentOpen,
   waitP0P1,
   waitP0P1Lines,
   waitP2P3,
@@ -1260,7 +1259,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
   const entFrPendingDetails = new Map(); // enterprise/elite issues not yet breached
-  let aiAgentOpenCount = 0; // state=new issues handled by the AI agent (no SLA obligations)
+  const handoffItems = new Map();        // state=new issues with hand_off_region set
+  let aiAgentOpenCount = 0;              // state=new issues handled by the AI agent (no SLA obligations)
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1280,6 +1280,19 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
+
+      // Collect handoff issues regardless of assignee.
+      const handoffSlug = getHandoffRegionValue(issue);
+      if (handoffSlug && !handoffItems.has(issue.id)) {
+        handoffItems.set(issue.id, {
+          id: issue.id,
+          number: issue.number,
+          priorityLabel: prioLabel,
+          assigneeId: issue?.assignee?.id ?? null,
+          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+          meetingRequired: isMeetingRequired(issue),
+        });
+      }
 
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
       if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
@@ -1448,24 +1461,24 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     slaBreachedLines,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
-    aiAgentOpen: aiAgentOpenCount,
+    handoffItems,
     truncated,
   };
 }
 
 /**
- * Pass D: collect open handoff issues across all open states.
+ * Pass D: collect open handoff issues in waiting_on_customer and on_hold states.
  *
- * Runs one server-side filtered pass per open state (new, waiting_on_you,
- * waiting_on_customer, on_hold).  Checks hand_off_region client-side.
+ * state=new is covered by SCAN-B and state=waiting_on_you by SCAN-C, so SCAN-D
+ * only needs the remaining two open states to avoid redundant API passes.
+ * Checks hand_off_region client-side.
  * No time-based lookback — finds any age handoff issue as long as it's open.
  */
-async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
+async function scanHandoffIssues({ pylonToken }) {
   const handoffDisplay = new Map();
-  const seenIds = new Set();
   let truncated = false;
 
-  for (const state of ["new", "waiting_on_you", "waiting_on_customer", "on_hold"]) {
+  for (const state of ["waiting_on_customer", "on_hold"]) {
     const filter = { field: "state", operator: "equals", value: state };
     let cursor = null;
     const seenCursors = new Set();
@@ -1479,13 +1492,12 @@ async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
       const data = Array.isArray(resp.data) ? resp.data : [];
 
       for (const issue of data) {
-        if (!issue?.id || seenIds.has(issue.id)) continue;
+        if (!issue?.id) continue;
         if (!isTeamL1L2(issue)) continue;
 
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
 
-        seenIds.add(issue.id);
         const prioRaw = getPriority(issue);
         const prioLabel = mapPriorityLabel(prioRaw);
         handoffDisplay.set(issue.id, {
@@ -1524,15 +1536,7 @@ async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
 
   console.log(`[SCAN-D] Handoff issues total: ${handoffDisplay.size}`);
 
-  const handoffIssueLines = handoffDisplay.size > 0
-    ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
-    : "";
-
-  return {
-    handoffIssues: handoffDisplay.size,
-    handoffIssueLines,
-    truncated,
-  };
+  return { handoffItems: handoffDisplay, truncated };
 }
 
 /**
@@ -1556,6 +1560,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
 
+  const handoffItems = new Map();        // waiting_on_you issues with hand_off_region set
   const waitP0P1Candidates = new Map();
   const waitP2P3Candidates = new Map();
 
@@ -1577,6 +1582,19 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
+
+      // Collect handoff issues regardless of priority.
+      const handoffSlug = getHandoffRegionValue(issue);
+      if (handoffSlug && !handoffItems.has(issue.id)) {
+        handoffItems.set(issue.id, {
+          id: issue.id,
+          number: issue.number,
+          priorityLabel: prioLabel,
+          assigneeId: issue?.assignee?.id ?? null,
+          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+          meetingRequired: isMeetingRequired(issue),
+        });
+      }
 
       const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
       const candidate = {
@@ -1701,6 +1719,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     waitP0P1Lines,
     waitP2P3: ids.waitP2P3.size,
     waitP2P3Lines,
+    handoffItems,
     truncated,
   };
 }
@@ -1750,8 +1769,17 @@ async function main() {
     );
   }
 
-  // Pass A: created during shift (can early-stop safely)
-  const created = await scanCreatedDuringShift({ slot, pylonToken });
+  // Pass A + audit-log run in parallel — neither depends on the other.
+  // Pass A can early-stop once oldest created_at < shift start.
+  // Audit log fetches ticket conversion timestamps for enterprise SLA clock correction.
+  // Enterprise issues that started as conversations have created_at = conversation start,
+  // which over-counts SLA elapsed time.  The audit log records when someone clicked
+  // "Make into ticket", which is the correct SLA start time.
+  const [created, conversionTimes] = await Promise.all([
+    scanCreatedDuringShift({ slot, pylonToken }),
+    fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
+  ]);
+
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
@@ -1783,24 +1811,27 @@ async function main() {
     ? unassignedIssues.map(i => `<${pylonIssueUrl(i.id)}|#${i.number}>`).join(" | ")
     : "";
 
-  // Fetch audit-log ticket conversion timestamps for enterprise SLA clock correction.
-  // Enterprise issues that started as conversations have created_at = conversation start,
-  // which over-counts SLA elapsed time.  The audit log records when someone clicked
-  // "Make into ticket", which is the correct SLA start time.
-  const AUDIT_LOG_LOOKBACK_DAYS = 90;
-  const conversionTimes = await fetchTicketConversionTimes({
-    pylonToken,
-    lookbackDays: AUDIT_LOG_LOOKBACK_DAYS,
-  });
+  // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
+  // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
+  const [metrics, waiting, handoff] = await Promise.all([
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName }),
+    scanHandoffIssues({ pylonToken }),
+  ]);
 
-  // Pass B: SLA metrics (state=new server-side filter — fast, no lookback needed)
-  const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes });
-
-  // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
-  const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
-
-  // Pass D: handoff issues across all open states (server-side per-state filters, no lookback)
-  const handoff = await scanHandoffIssues({ pylonToken, assigneeIdToName });
+  // Merge handoff items collected across all three passes.
+  // SCAN-B covers state=new, SCAN-C covers state=waiting_on_you,
+  // SCAN-D covers state=waiting_on_customer and state=on_hold.
+  // Map insertion order gives SCAN-B precedence for any duplicate ids (shouldn't occur).
+  const allHandoffItems = new Map([
+    ...metrics.handoffItems,
+    ...waiting.handoffItems,
+    ...handoff.handoffItems,
+  ]);
+  const handoffIssues = allHandoffItems.size;
+  const handoffIssueLines = handoffIssues > 0
+    ? buildHandoffIssueLines(Array.from(allHandoffItems.values()), assigneeIdToName)
+    : "";
 
   // Collect truncation warnings
   const truncationWarnings = [];
@@ -1831,13 +1862,12 @@ async function main() {
     slaBreached: metrics.slaBreached,
     p0p1IssueLines: metrics.p0p1IssueLines,
     slaBreachedLines: metrics.slaBreachedLines,
-    aiAgentOpen: metrics.aiAgentOpen,
     waitP0P1: waiting.waitP0P1,
     waitP0P1Lines: waiting.waitP0P1Lines,
     waitP2P3: waiting.waitP2P3,
     waitP2P3Lines: waiting.waitP2P3Lines,
-    handoffIssues: handoff.handoffIssues,
-    handoffIssueLines: handoff.handoffIssueLines,
+    handoffIssues,
+    handoffIssueLines,
     truncationWarnings,
   });
 
@@ -1854,12 +1884,11 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
-    aiAgentOpen: metrics.aiAgentOpen,
     enterpriseConversionTimestampsLoaded: conversionTimes.size,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
-    handoffIssues: handoff.handoffIssues,
-    handoffIssueLines: handoff.handoffIssueLines || "(empty)",
+    handoffIssues,
+    handoffIssueLines: handoffIssueLines || "(empty)",
     slackMessageLength: slackText.length,
     enforcedTeamId: TEAM_ID_L1_L2,
     openStates: Array.from(OPEN_STATES),
