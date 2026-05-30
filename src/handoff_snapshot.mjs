@@ -1273,8 +1273,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
       const prioLabel = mapPriorityLabel(prioRaw);
       const createdAtUtc = parseUtcIso(issue.created_at);
 
-      // FR SLA Pending buckets (state=new only)
-      if (issue.state === "new") {
+      // FR SLA Pending buckets (state=new only).
+      // Skip AI-agent-assigned tickets — they are being handled by the bot and
+      // should not surface as human-actionable SLA alerts.
+      if (issue.state === "new" && issue?.assignee?.id !== AI_SUPPORT_AGENT_ID) {
         const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
         const tier = tierRaw.replace(/-/g, "_");
 
