@@ -1110,8 +1110,6 @@ ${newTicketsAssignedPylonBreakdown}
 
   msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
 
-  msg += `\n🤖 *AI Agent Handling:* ${aiAgentOpen}`;
-
   if (slaBreached > 0 && slaBreachedLines) {
     msg += `\n${slaBreachedLines}`;
   }
