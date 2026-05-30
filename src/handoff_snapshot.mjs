@@ -1240,7 +1240,11 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
   const nowPt = ptNow();
 
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+  const LOOKBACK_DAYS_SCAN_B = (() => {
+    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
+    return Math.min(parsed, 365); // clamp to reasonable max
+  })();
   const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
 
   const ids = {
@@ -1746,7 +1750,11 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+  const LOOKBACK_DAYS_SCAN_B = (() => {
+    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
+    return Math.min(parsed, 365); // clamp to reasonable max
+  })();
   const conversionTimes = await fetchTicketConversionTimes({
     pylonToken,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
