@@ -1065,6 +1065,7 @@ function buildSlackHandoffMessage({
   waitP2P3Lines,
   handoffIssues,
   handoffIssueLines,
+  truncationWarnings,
 }) {
   const eP0P1 = statusEmoji({ count: frP0P1, alertLevel: "critical" });
   const eP2P3 = statusEmoji({ count: frP2P3 });
@@ -1129,6 +1130,13 @@ ${newTicketsAssignedPylonBreakdown}
 
   if (handoffIssues > 0 && handoffIssueLines) {
     msg += `\n${handoffIssueLines}`;
+  }
+
+  if (truncationWarnings && truncationWarnings.length > 0) {
+    msg += `\n\n⚠️ *Warning: Results truncated at MAX_PAGES limit*`;
+    for (const warning of truncationWarnings) {
+      msg += `\n  ${warning}`;
+    }
   }
 
   return msg;
@@ -1258,6 +1266,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
   const seenCursors = new Set();
   let page = 0;
   const MAX_PAGES = 50; // state=new is a small set; 50 pages × 200 = 10k safety cap
+  let truncated = false;
 
   while (true) {
     page += 1;
@@ -1394,6 +1403,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 
     if (page >= MAX_PAGES) {
       console.warn(`[SCAN-B] hit MAX_PAGES=${MAX_PAGES}; stopping.`);
+      truncated = true;
       break;
     }
 
@@ -1439,6 +1449,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
     aiAgentOpen: aiAgentOpenCount,
+    truncated,
   };
 }
 
@@ -1452,6 +1463,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
   const handoffDisplay = new Map();
   const seenIds = new Set();
+  let truncated = false;
 
   for (const state of ["new", "waiting_on_you", "waiting_on_customer", "on_hold"]) {
     const filter = { field: "state", operator: "equals", value: state };
@@ -1501,6 +1513,7 @@ async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
 
       if (page >= MAX_PAGES) {
         console.warn(`[SCAN-D] hit MAX_PAGES=${MAX_PAGES} for state=${state}; stopping.`);
+        truncated = true;
         break;
       }
 
@@ -1518,6 +1531,7 @@ async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
   return {
     handoffIssues: handoffDisplay.size,
     handoffIssueLines,
+    truncated,
   };
 }
 
@@ -1549,6 +1563,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
   const seenCursors = new Set();
   let page = 0;
   const MAX_PAGES = 200;
+  let truncated = false;
 
   while (true) {
     page += 1;
@@ -1599,6 +1614,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
 
     if (page >= MAX_PAGES) {
       console.warn(`[SCAN-C] hit MAX_PAGES=${MAX_PAGES}; stopping.`);
+      truncated = true;
       break;
     }
 
@@ -1685,6 +1701,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
     waitP0P1Lines,
     waitP2P3: ids.waitP2P3.size,
     waitP2P3Lines,
+    truncated,
   };
 }
 
@@ -1785,6 +1802,18 @@ async function main() {
   // Pass D: handoff issues across all open states (server-side per-state filters, no lookback)
   const handoff = await scanHandoffIssues({ pylonToken, assigneeIdToName });
 
+  // Collect truncation warnings
+  const truncationWarnings = [];
+  if (metrics.truncated) {
+    truncationWarnings.push("SCAN-B (SLA metrics) truncated");
+  }
+  if (waiting.truncated) {
+    truncationWarnings.push("SCAN-C (waiting-on-support) truncated");
+  }
+  if (handoff.truncated) {
+    truncationWarnings.push("SCAN-D (handoff issues) truncated");
+  }
+
   const slackText = buildSlackHandoffMessage({
     slot,
     headerLabel,
@@ -1809,6 +1838,7 @@ async function main() {
     waitP2P3Lines: waiting.waitP2P3Lines,
     handoffIssues: handoff.handoffIssues,
     handoffIssueLines: handoff.handoffIssueLines,
+    truncationWarnings,
   });
 
   await postToSlack({ slackToken, text: slackText });
@@ -1834,7 +1864,16 @@ async function main() {
     enforcedTeamId: TEAM_ID_L1_L2,
     openStates: Array.from(OPEN_STATES),
     slackChannel: SLACK_CHANNEL,
+    truncated: {
+      scanB: metrics.truncated,
+      scanC: waiting.truncated,
+      scanD: handoff.truncated,
+    },
   });
+
+  if (truncationWarnings.length > 0) {
+    console.warn("⚠️ Some scans hit MAX_PAGES limit:", truncationWarnings);
+  }
 }
 
 main().catch((err) => {
