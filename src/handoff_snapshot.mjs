@@ -16,7 +16,6 @@
  *
  * Optional Env:
  *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
- *   SCAN_B_LOOKBACK_DAYS=90               # override the SCAN-B lookback window (default 90)
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
  *   PYLON_MESSAGES_DELAY_MS=500           # delay between message API calls (default 500ms)
  *
@@ -1223,52 +1222,47 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 }
 
 /**
- * Pass B: scan recent issues (within lookback window) collecting:
- * - FR SLA Pending P0/P1 (state=new + urgent/high)
- * - FR SLA Pending P2/P3 (state=new + medium/low)
- * - Handoff issues (open + team L1+L2 + hand_off_region set)
+ * Pass B: collect SLA metrics for state=new issues.
+ * Uses a server-side state=new filter — only unanswered issues are returned,
+ * so pagination is fast (hundreds of issues, not thousands).
+ * No time-based lookback needed; relies on hasNext + MAX_PAGES as safety cap.
  *
- * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 90).
- * Waiting-on-support is handled separately by scanWaitingOnSupport()
- * using server-side state filter for performance.
+ * Collects:
+ * - FR SLA Pending P0/P1 (urgent/high, non-enterprise, not yet breached)
+ * - FR SLA Pending P2/P3 (medium/low, non-enterprise, not yet overdue)
+ * - FR SLA Breached (any tier, overdue)
+ * - Enterprise FR Pending (enterprise/elite, not yet breached)
+ *
+ * Handoff issues are collected separately by scanHandoffIssues() (Pass D).
  *
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
- *   For enterprise issues that were originally conversations, the SLA clock starts at
- *   the conversion timestamp rather than issue.created_at.  Non-enterprise issues and
- *   enterprise issues with no conversion record continue to use created_at.
+ *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
 async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
   const nowPt = ptNow();
 
-  const LOOKBACK_DAYS_SCAN_B = (() => {
-    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
-    return Math.min(parsed, 365); // clamp to reasonable max
-  })();
-  const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
+  const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
 
   const ids = {
     frP0P1: new Set(),
     frP2P3: new Set(),
     slaBreached: new Set(),
-    handoff: new Set(),
   };
 
-  const handoffDisplay = new Map();
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
-  const entFrPendingDetails = new Map(); // enterprise/elite issues in state=new, not yet breached
+  const entFrPendingDetails = new Map(); // enterprise/elite issues not yet breached
   let aiAgentOpenCount = 0; // state=new issues handled by the AI agent (no SLA obligations)
 
   let cursor = null;
   const seenCursors = new Set();
   let page = 0;
-  const MAX_PAGES = 500;
+  const MAX_PAGES = 50; // state=new is a small set; 50 pages × 200 = 10k safety cap
 
   while (true) {
     page += 1;
 
-    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
+    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, filter: NEW_STATE_FILTER });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
     for (const issue of data) {
@@ -1277,113 +1271,74 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
-      const createdAtUtc = parseUtcIso(issue.created_at);
 
-      // Count AI-agent-handled open issues separately; exclude from all SLA buckets.
-      if (issue.state === "new" && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+      // Count AI-agent-handled issues separately; exclude from all SLA buckets.
+      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
         aiAgentOpenCount++;
+        continue;
       }
 
-      // FR SLA Pending buckets (state=new only).
-      // Skip AI-agent-assigned tickets — they are being handled by the bot and
-      // should not surface as human-actionable SLA alerts.
-      if (issue.state === "new" && issue?.assignee?.id !== AI_SUPPORT_AGENT_ID) {
-        const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
-        const tier = tierRaw.replace(/-/g, "_");
+      const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
+      const tier = tierRaw.replace(/-/g, "_");
 
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
-          // Compute time remaining until FRT SLA for display
-          const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
-          const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
-          const p0p1Coverage = SLA_COVERAGE[tier]?.[p0p1PrioIdx] ?? "biz";
-          let p0p1TimeRemaining = null;
-          if (p0p1SlaSeconds !== null && issue.created_at) {
-            const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
-            p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
-          }
-          // Only add to Pending if SLA unknown or not yet breached — overdue issues
-          // move exclusively to FR SLA Breached.
-          if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
-            ids.frP0P1.add(issue.id);
-            p0p1Details.set(issue.id, {
-              id: issue.id,
-              number: issue.number,
-              priorityLabel: prioLabel,
-              tier,
-              timeRemainingSeconds: p0p1TimeRemaining,
-              isCalendar: p0p1Coverage !== "biz",
-              assigneeId: issue?.assignee?.id ?? null,
-              subject: issue?.title ?? "(No subject)",
-            });
-          }
+      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
+        const p0p1PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
+        const p0p1SlaSeconds = p0p1PrioIdx !== null ? (SLA_SECONDS[tier]?.[p0p1PrioIdx] ?? null) : null;
+        const p0p1Coverage = SLA_COVERAGE[tier]?.[p0p1PrioIdx] ?? "biz";
+        let p0p1TimeRemaining = null;
+        if (p0p1SlaSeconds !== null && issue.created_at) {
+          const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
+          p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
         }
-
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
-          // Only count as Pending if not yet overdue
-          const p2p3PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
-          const p2p3SlaSeconds = p2p3PrioIdx !== null ? (SLA_SECONDS[tier]?.[p2p3PrioIdx] ?? null) : null;
-          const p2p3Coverage = SLA_COVERAGE[tier]?.[p2p3PrioIdx] ?? "biz";
-          let p2p3Overdue = false;
-          if (p2p3SlaSeconds !== null && issue.created_at) {
-            const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
-            p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
-          }
-          if (!p2p3Overdue) {
-            ids.frP2P3.add(issue.id);
-          }
+        // Only add to Pending if not yet breached — overdue issues move to FR SLA Breached.
+        if (p0p1TimeRemaining === null || p0p1TimeRemaining >= 0) {
+          ids.frP0P1.add(issue.id);
+          p0p1Details.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            tier,
+            timeRemainingSeconds: p0p1TimeRemaining,
+            isCalendar: p0p1Coverage !== "biz",
+            assigneeId: issue?.assignee?.id ?? null,
+            subject: issue?.title ?? "(No subject)",
+          });
         }
+      }
 
-        // FRT SLA breach: check tier × priority threshold.
-        // For enterprise issues, use the audit-log conversion timestamp if available
-        // (issue was originally a conversation; SLA clock starts at conversion time).
-        if (prioRaw && issue.created_at) {
-          const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
-          const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
-          if (slaSeconds !== null) {
-            const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
-            const slaStartIso = isEnterpriseTier(tier)
-              ? (conversionTimes?.get(issue.id) ?? issue.created_at)
-              : issue.created_at;
-            const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
-            if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
-              ids.slaBreached.add(issue.id);
-              slaBreachedDetails.set(issue.id, {
-                id: issue.id,
-                number: issue.number,
-                priorityLabel: prioLabel,
-                tier,
-                overdueSeconds: elapsed - slaSeconds,
-                isCalendar: coverage !== "biz",
-                assigneeId: issue?.assignee?.id ?? null,
-                subject: issue?.title ?? "(No subject)",
-              });
-            }
-          }
+      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !isEnterpriseTier(tier)) {
+        const p2p3PrioIdx = PRIORITY_IDX[prioRaw] ?? null;
+        const p2p3SlaSeconds = p2p3PrioIdx !== null ? (SLA_SECONDS[tier]?.[p2p3PrioIdx] ?? null) : null;
+        const p2p3Coverage = SLA_COVERAGE[tier]?.[p2p3PrioIdx] ?? "biz";
+        let p2p3Overdue = false;
+        if (p2p3SlaSeconds !== null && issue.created_at) {
+          const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
+          p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
         }
+        if (!p2p3Overdue) {
+          ids.frP2P3.add(issue.id);
+        }
+      }
 
-        // Enterprise FR Pending: track all enterprise/elite new issues not yet breached.
-        // Use audit-log conversion timestamp (if present) as the SLA clock start.
-        if (isEnterpriseTier(tier) && prioRaw && !entFrPendingDetails.has(issue.id)) {
-          const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
-          const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
+      // FRT SLA breach: check tier × priority threshold.
+      // For enterprise issues, use the audit-log conversion timestamp if available.
+      if (prioRaw && issue.created_at) {
+        const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
+        const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
+        if (slaSeconds !== null) {
           const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
-          const slaStartIso = conversionTimes?.get(issue.id) ?? issue.created_at;
-          let timeRemaining = null;
-          if (slaSeconds !== null && slaStartIso) {
-            const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
-            timeRemaining = slaSeconds - elapsed;
-          }
-          if (timeRemaining === null || timeRemaining >= 0) {
-            const accountId = issue?.account?.id ?? null;
-            entFrPendingDetails.set(issue.id, {
+          const slaStartIso = isEnterpriseTier(tier)
+            ? (conversionTimes?.get(issue.id) ?? issue.created_at)
+            : issue.created_at;
+          const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
+          if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
+            ids.slaBreached.add(issue.id);
+            slaBreachedDetails.set(issue.id, {
               id: issue.id,
               number: issue.number,
               priorityLabel: prioLabel,
-              prioRaw,
               tier,
-              accountId,
-              accountName: null, // resolved after scan
-              timeRemainingSeconds: timeRemaining,
+              overdueSeconds: elapsed - slaSeconds,
               isCalendar: coverage !== "biz",
               assigneeId: issue?.assignee?.id ?? null,
               subject: issue?.title ?? "(No subject)",
@@ -1392,50 +1347,44 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
         }
       }
 
-      // Open handoff issues
-      if (isOpenHandoffIssue(issue)) {
-        ids.handoff.add(issue.id);
-        if (!handoffDisplay.has(issue.id)) {
-          const slug = getHandoffRegionValue(issue);
-          handoffDisplay.set(issue.id, {
+      // Enterprise FR Pending: enterprise/elite new issues not yet breached.
+      if (isEnterpriseTier(tier) && prioRaw && !entFrPendingDetails.has(issue.id)) {
+        const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
+        const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
+        const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
+        const slaStartIso = conversionTimes?.get(issue.id) ?? issue.created_at;
+        let timeRemaining = null;
+        if (slaSeconds !== null && slaStartIso) {
+          const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
+          timeRemaining = slaSeconds - elapsed;
+        }
+        if (timeRemaining === null || timeRemaining >= 0) {
+          const accountId = issue?.account?.id ?? null;
+          entFrPendingDetails.set(issue.id, {
             id: issue.id,
             number: issue.number,
             priorityLabel: prioLabel,
+            prioRaw,
+            tier,
+            accountId,
+            accountName: null, // resolved after scan
+            timeRemainingSeconds: timeRemaining,
+            isCalendar: coverage !== "biz",
             assigneeId: issue?.assignee?.id ?? null,
-            handoffRegionLabel: handoffLabelFromSlug(slug),
-            meetingRequired: isMeetingRequired(issue),
+            subject: issue?.title ?? "(No subject)",
           });
         }
       }
-
     }
 
     const hasNext = resp?.pagination?.has_next_page === true;
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-B] page=${page} fetched=${data.length} handoff=${ids.handoff.size} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} slaBreached=${ids.slaBreached.size}`
+      `[SCAN-B] page=${page} fetched=${data.length} p0p1=${ids.frP0P1.size} p2p3=${ids.frP2P3.size} slaBreached=${ids.slaBreached.size} aiAgent=${aiAgentOpenCount}`
     );
 
     if (!hasNext || !nextCursor) break;
-
-    // Early-stop at lookback cutoff
-    // Use conversionTimes for enterprise issues when available, else issue.created_at
-    const oldestCreatedUtc = data
-      .map((i) => {
-        if (!i?.id || !i?.created_at) return null;
-        const effectiveStart = conversionTimes?.get(i.id) ?? i.created_at;
-        return parseUtcIso(effectiveStart);
-      })
-      .filter(Boolean)
-      .reduce((min, dt) => (min == null || dt < min ? dt : min), null);
-
-    if (oldestCreatedUtc && oldestCreatedUtc < lookbackCutoffUtc) {
-      console.log(
-        `[SCAN-B] Reached lookback cutoff (${lookbackCutoffUtc.toISO()}); stopping pagination.`
-      );
-      break;
-    }
 
     if (seenCursors.has(nextCursor)) {
       console.warn(`[SCAN-B] cursor repeated; stopping to avoid infinite paging.`);
@@ -1466,11 +1415,6 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     console.log(`[SCAN-B] Resolved account names for ${entFrPendingDetails.size} enterprise FR pending issues.`);
   }
 
-  const handoffIssueLines =
-    ids.handoff.size > 0
-      ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
-      : "";
-
   const p0p1IssueLines =
     ids.frP0P1.size > 0
       ? buildP0P1IssueLines(Array.from(p0p1Details.values()), assigneeIdToName)
@@ -1495,9 +1439,85 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
     aiAgentOpen: aiAgentOpenCount,
-    handoffIssues: ids.handoff.size,
+  };
+}
+
+/**
+ * Pass D: collect open handoff issues across all open states.
+ *
+ * Runs one server-side filtered pass per open state (new, waiting_on_you,
+ * waiting_on_customer, on_hold).  Checks hand_off_region client-side.
+ * No time-based lookback — finds any age handoff issue as long as it's open.
+ */
+async function scanHandoffIssues({ pylonToken, assigneeIdToName }) {
+  const handoffDisplay = new Map();
+  const seenIds = new Set();
+
+  for (const state of ["new", "waiting_on_you", "waiting_on_customer", "on_hold"]) {
+    const filter = { field: "state", operator: "equals", value: state };
+    let cursor = null;
+    const seenCursors = new Set();
+    let page = 0;
+    const MAX_PAGES = 100;
+
+    while (true) {
+      page += 1;
+
+      const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, filter });
+      const data = Array.isArray(resp.data) ? resp.data : [];
+
+      for (const issue of data) {
+        if (!issue?.id || seenIds.has(issue.id)) continue;
+        if (!isTeamL1L2(issue)) continue;
+
+        const slug = getHandoffRegionValue(issue);
+        if (!slug) continue;
+
+        seenIds.add(issue.id);
+        const prioRaw = getPriority(issue);
+        const prioLabel = mapPriorityLabel(prioRaw);
+        handoffDisplay.set(issue.id, {
+          id: issue.id,
+          number: issue.number,
+          priorityLabel: prioLabel,
+          assigneeId: issue?.assignee?.id ?? null,
+          handoffRegionLabel: handoffLabelFromSlug(slug),
+          meetingRequired: isMeetingRequired(issue),
+        });
+      }
+
+      const hasNext = resp?.pagination?.has_next_page === true;
+      const nextCursor = resp?.pagination?.cursor ?? null;
+
+      console.log(`[SCAN-D] state=${state} page=${page} fetched=${data.length} handoff=${handoffDisplay.size}`);
+
+      if (!hasNext || !nextCursor) break;
+
+      if (seenCursors.has(nextCursor)) {
+        console.warn(`[SCAN-D] cursor repeated for state=${state}; stopping.`);
+        break;
+      }
+      seenCursors.add(nextCursor);
+
+      if (page >= MAX_PAGES) {
+        console.warn(`[SCAN-D] hit MAX_PAGES=${MAX_PAGES} for state=${state}; stopping.`);
+        break;
+      }
+
+      cursor = nextCursor;
+      await sleep(200);
+    }
+  }
+
+  console.log(`[SCAN-D] Handoff issues total: ${handoffDisplay.size}`);
+
+  const handoffIssueLines = handoffDisplay.size > 0
+    ? buildHandoffIssueLines(Array.from(handoffDisplay.values()), assigneeIdToName)
+    : "";
+
+  return {
+    handoffIssues: handoffDisplay.size,
     handoffIssueLines,
-    lookbackDays: LOOKBACK_DAYS_SCAN_B,
   };
 }
 
@@ -1750,21 +1770,20 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const LOOKBACK_DAYS_SCAN_B = (() => {
-    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
-    return Math.min(parsed, 365); // clamp to reasonable max
-  })();
+  const AUDIT_LOG_LOOKBACK_DAYS = 90;
   const conversionTimes = await fetchTicketConversionTimes({
     pylonToken,
-    lookbackDays: LOOKBACK_DAYS_SCAN_B,
+    lookbackDays: AUDIT_LOG_LOOKBACK_DAYS,
   });
 
-  // Pass B: queue metrics + open handoff (lookback-bounded scan)
+  // Pass B: SLA metrics (state=new server-side filter — fast, no lookback needed)
   const metrics = await scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes });
 
   // Pass C: waiting-on-support (server-side state filter — no full pagination needed)
   const waiting = await scanWaitingOnSupport({ pylonToken, assigneeIdToName });
+
+  // Pass D: handoff issues across all open states (server-side per-state filters, no lookback)
+  const handoff = await scanHandoffIssues({ pylonToken, assigneeIdToName });
 
   const slackText = buildSlackHandoffMessage({
     slot,
@@ -1788,8 +1807,8 @@ async function main() {
     waitP0P1Lines: waiting.waitP0P1Lines,
     waitP2P3: waiting.waitP2P3,
     waitP2P3Lines: waiting.waitP2P3Lines,
-    handoffIssues: metrics.handoffIssues,
-    handoffIssueLines: metrics.handoffIssueLines,
+    handoffIssues: handoff.handoffIssues,
+    handoffIssueLines: handoff.handoffIssueLines,
   });
 
   await postToSlack({ slackToken, text: slackText });
@@ -1809,10 +1828,9 @@ async function main() {
     enterpriseConversionTimestampsLoaded: conversionTimes.size,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
-    handoffIssues: metrics.handoffIssues,
-    handoffIssueLines: metrics.handoffIssueLines || "(empty)",
+    handoffIssues: handoff.handoffIssues,
+    handoffIssueLines: handoff.handoffIssueLines || "(empty)",
     slackMessageLength: slackText.length,
-    scanBLookbackDays: metrics.lookbackDays,
     enforcedTeamId: TEAM_ID_L1_L2,
     openStates: Array.from(OPEN_STATES),
     slackChannel: SLACK_CHANNEL,
