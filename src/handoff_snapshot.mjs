@@ -16,7 +16,7 @@
  *
  * Optional Env:
  *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
- *   SCAN_B_LOOKBACK_DAYS=30               # override the SCAN-B lookback window (default 30)
+ *   SCAN_B_LOOKBACK_DAYS=90               # override the SCAN-B lookback window (default 90)
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
  *   PYLON_MESSAGES_DELAY_MS=500           # delay between message API calls (default 500ms)
  *
@@ -1059,6 +1059,7 @@ function buildSlackHandoffMessage({
   slaBreached,
   p0p1IssueLines,
   slaBreachedLines,
+  aiAgentOpen,
   waitP0P1,
   waitP0P1Lines,
   waitP2P3,
@@ -1227,7 +1228,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
  * - FR SLA Pending P2/P3 (state=new + medium/low)
  * - Handoff issues (open + team L1+L2 + hand_off_region set)
  *
- * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 30).
+ * Stops pagination at LOOKBACK_DAYS_SCAN_B (default 90).
  * Waiting-on-support is handled separately by scanWaitingOnSupport()
  * using server-side state filter for performance.
  *
@@ -1239,7 +1240,11 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
   const nowPt = ptNow();
 
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
+  const LOOKBACK_DAYS_SCAN_B = (() => {
+    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
+    return Math.min(parsed, 365); // clamp to reasonable max
+  })();
   const lookbackCutoffUtc = nowPt.minus({ days: LOOKBACK_DAYS_SCAN_B }).toUTC();
 
   const ids = {
@@ -1253,6 +1258,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
   const entFrPendingDetails = new Map(); // enterprise/elite issues in state=new, not yet breached
+  let aiAgentOpenCount = 0; // state=new issues handled by the AI agent (no SLA obligations)
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1273,8 +1279,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
       const prioLabel = mapPriorityLabel(prioRaw);
       const createdAtUtc = parseUtcIso(issue.created_at);
 
-      // FR SLA Pending buckets (state=new only)
-      if (issue.state === "new") {
+      // Count AI-agent-handled open issues separately; exclude from all SLA buckets.
+      if (issue.state === "new" && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+        aiAgentOpenCount++;
+      }
+
+      // FR SLA Pending buckets (state=new only).
+      // Skip AI-agent-assigned tickets — they are being handled by the bot and
+      // should not surface as human-actionable SLA alerts.
+      if (issue.state === "new" && issue?.assignee?.id !== AI_SUPPORT_AGENT_ID) {
         const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
         const tier = tierRaw.replace(/-/g, "_");
 
@@ -1481,6 +1494,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     slaBreachedLines,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
+    aiAgentOpen: aiAgentOpenCount,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -1736,7 +1750,11 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const LOOKBACK_DAYS_SCAN_B = Number(process.env.SCAN_B_LOOKBACK_DAYS || 30);
+  const LOOKBACK_DAYS_SCAN_B = (() => {
+    const parsed = Number(process.env.SCAN_B_LOOKBACK_DAYS || 90);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 90;
+    return Math.min(parsed, 365); // clamp to reasonable max
+  })();
   const conversionTimes = await fetchTicketConversionTimes({
     pylonToken,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -1765,6 +1783,7 @@ async function main() {
     slaBreached: metrics.slaBreached,
     p0p1IssueLines: metrics.p0p1IssueLines,
     slaBreachedLines: metrics.slaBreachedLines,
+    aiAgentOpen: metrics.aiAgentOpen,
     waitP0P1: waiting.waitP0P1,
     waitP0P1Lines: waiting.waitP0P1Lines,
     waitP2P3: waiting.waitP2P3,
@@ -1786,6 +1805,7 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
+    aiAgentOpen: metrics.aiAgentOpen,
     enterpriseConversionTimestampsLoaded: conversionTimes.size,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
