@@ -1059,6 +1059,7 @@ function buildSlackHandoffMessage({
   slaBreached,
   p0p1IssueLines,
   slaBreachedLines,
+  aiAgentOpen,
   waitP0P1,
   waitP0P1Lines,
   waitP2P3,
@@ -1108,6 +1109,8 @@ ${newTicketsAssignedPylonBreakdown}
   msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
   msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
+
+  msg += `\n🤖 *AI Agent Handling:* ${aiAgentOpen}`;
 
   if (slaBreached > 0 && slaBreachedLines) {
     msg += `\n${slaBreachedLines}`;
@@ -1253,6 +1256,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
   const p0p1Details = new Map();
   const slaBreachedDetails = new Map();
   const entFrPendingDetails = new Map(); // enterprise/elite issues in state=new, not yet breached
+  let aiAgentOpenCount = 0; // state=new issues handled by the AI agent (no SLA obligations)
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1272,6 +1276,11 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
       const createdAtUtc = parseUtcIso(issue.created_at);
+
+      // Count AI-agent-handled open issues separately; exclude from all SLA buckets.
+      if (issue.state === "new" && issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+        aiAgentOpenCount++;
+      }
 
       // FR SLA Pending buckets (state=new only).
       // Skip AI-agent-assigned tickets — they are being handled by the bot and
@@ -1483,6 +1492,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
     slaBreachedLines,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
+    aiAgentOpen: aiAgentOpenCount,
     handoffIssues: ids.handoff.size,
     handoffIssueLines,
     lookbackDays: LOOKBACK_DAYS_SCAN_B,
@@ -1767,6 +1777,7 @@ async function main() {
     slaBreached: metrics.slaBreached,
     p0p1IssueLines: metrics.p0p1IssueLines,
     slaBreachedLines: metrics.slaBreachedLines,
+    aiAgentOpen: metrics.aiAgentOpen,
     waitP0P1: waiting.waitP0P1,
     waitP0P1Lines: waiting.waitP0P1Lines,
     waitP2P3: waiting.waitP2P3,
@@ -1788,6 +1799,7 @@ async function main() {
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
+    aiAgentOpen: metrics.aiAgentOpen,
     enterpriseConversionTimestampsLoaded: conversionTimes.size,
     waitP0P1: waiting.waitP0P1,
     waitP2P3: waiting.waitP2P3,
