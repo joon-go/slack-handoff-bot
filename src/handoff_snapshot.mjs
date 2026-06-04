@@ -1049,7 +1049,6 @@ function buildSlackHandoffMessage({
   newTicketsDuringShiftCount,
   aiAgentCount,
   humanAgentCount,
-  unassignedLine,
   newTicketsAssignedPylonBreakdown,
   entFrPending,
   entFrPendingLines,
@@ -1085,10 +1084,6 @@ function buildSlackHandoffMessage({
 *Date:* ${datePt}
 *New tickets during ${region}:* ${newTicketsDuringShiftCount}
 AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
-
-  if (unassignedLine) {
-    msg += `\n*Unassigned:* ${unassignedLine}`;
-  }
 
   msg +=
 `\n*Assigned:*
@@ -1807,11 +1802,6 @@ async function main() {
   const allRegionsBreakdown =
     `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
 
-  // SCAN-A now only includes issues assigned to a roster member or the AI agent,
-  // so created.issues contains only roster-member-assigned issues — the unassigned
-  // display is always empty and omitted.
-  const unassignedLine = "";
-
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
@@ -1854,7 +1844,6 @@ async function main() {
     newTicketsDuringShiftCount,
     aiAgentCount,
     humanAgentCount,
-    unassignedLine,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
