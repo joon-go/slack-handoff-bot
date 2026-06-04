@@ -1149,16 +1149,17 @@ ${newTicketsAssignedPylonBreakdown}
  * counted as new tickets for that shift.
  * We can safely stop paging once oldest created_at < startUtc.
  */
-async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
+async function scanCreatedDuringShift({ slot, pylonToken, assigneeNameToId }) {
   const nowPt = ptNow();
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
 
-  // Build the set of all known roster names for assignee matching.
-  const allRosterNames = new Set([
-    ...(REGION_ROSTERS.apac || []),
-    ...(REGION_ROSTERS.emea || []),
-    ...(REGION_ROSTERS.us   || []),
-  ]);
+  // Resolve roster display names to Pylon user IDs once, outside the paging loop.
+  // Using IDs rather than display names makes the check rename-proof.
+  const allRosterIds = new Set(
+    [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])]
+      .map(name => assigneeNameToId[name])
+      .filter(Boolean)
+  );
 
   const createdIds = new Set();
   const createdIssues = []; // human-assigned only (for roster breakdown)
@@ -1182,8 +1183,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
       // agent — the Pylon team label is not used as a filter here.
       const assigneeId = issue?.assignee?.id;
       const isAiAgent = assigneeId === AI_SUPPORT_AGENT_ID;
-      const assigneeName = assigneeId ? (assigneeIdToName[assigneeId] ?? null) : null;
-      const isRosterMember = assigneeName != null && allRosterNames.has(assigneeName);
+      const isRosterMember = assigneeId != null && allRosterIds.has(assigneeId);
       if (!isAiAgent && !isRosterMember) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
@@ -1770,7 +1770,7 @@ async function main() {
   const { headerLabel } = SLOT_CONFIG[slot];
   const datePt = formatDatePt(ptNow());
 
-  const { assigneeIdToName } = await fetchAssigneeMaps({ pylonToken });
+  const { assigneeIdToName, assigneeNameToId } = await fetchAssigneeMaps({ pylonToken });
   if (Object.keys(assigneeIdToName).length === 0) {
     throw new Error(
       "[FATAL] fetchAssigneeMaps returned an empty map. " +
@@ -1785,7 +1785,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }),
+    scanCreatedDuringShift({ slot, pylonToken, assigneeNameToId }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
   ]);
 
