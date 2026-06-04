@@ -1147,14 +1147,23 @@ ${newTicketsAssignedPylonBreakdown}
 
 /**
  * Pass A: collect tickets created during the shift window (all states).
- * Counts ONLY those currently on L1+L2 team.
+ * Counts issues assigned to any roster member (any region) or the AI support
+ * agent, regardless of the Pylon team label.  This catches tickets that arrive
+ * with a different (or missing) team tag but land on a support team member.
  * Tickets responded to by an agent move to waiting_on_you — they are still
  * counted as new tickets for that shift.
  * We can safely stop paging once oldest created_at < startUtc.
  */
-async function scanCreatedDuringShift({ slot, pylonToken }) {
+async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
   const nowPt = ptNow();
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
+
+  // Build the set of all known roster names for assignee matching.
+  const allRosterNames = new Set([
+    ...(REGION_ROSTERS.apac || []),
+    ...(REGION_ROSTERS.emea || []),
+    ...(REGION_ROSTERS.us   || []),
+  ]);
 
   const createdIds = new Set();
   const createdIssues = []; // human-assigned only (for roster breakdown)
@@ -1174,8 +1183,13 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
     for (const issue of data) {
       if (!issue?.id) continue;
 
-      // ✅ only L1+L2 (team null excluded)
-      if (!isTeamL1L2(issue)) continue;
+      // Count the issue if its assignee is a roster member or the AI support
+      // agent — the Pylon team label is not used as a filter here.
+      const assigneeId = issue?.assignee?.id;
+      const isAiAgent = assigneeId === AI_SUPPORT_AGENT_ID;
+      const assigneeName = assigneeId ? (assigneeIdToName[assigneeId] ?? null) : null;
+      const isRosterMember = assigneeName != null && allRosterNames.has(assigneeName);
+      if (!isAiAgent && !isRosterMember) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
       if (!(createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc)) continue;
@@ -1183,7 +1197,7 @@ async function scanCreatedDuringShift({ slot, pylonToken }) {
 
       createdIds.add(issue.id);
 
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+      if (isAiAgent) {
         // Count AI-handled tickets in the total but keep them out of the
         // human roster breakdown (Assigned: block).
         console.log(`[SCAN-A] ai-agent issue=${issue.id} number=${issue.number}`);
@@ -1776,7 +1790,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken }),
+    scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
   ]);
 
@@ -1793,23 +1807,10 @@ async function main() {
   const allRegionsBreakdown =
     `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
 
-  // Unassigned: tickets with no assignee OR assigned to someone not on any region roster.
-  // These cause a gap between the total count and the per-roster breakdown, so we surface
-  // them explicitly so they don't go unnoticed at handoff time.
-  const allRosterNames = new Set([
-    ...(REGION_ROSTERS.apac || []),
-    ...(REGION_ROSTERS.emea || []),
-    ...(REGION_ROSTERS.us  || []),
-  ]);
-  const unassignedIssues = created.issues.filter(issue => {
-    const assigneeId = issue?.assignee?.id;
-    if (!assigneeId) return true;
-    const name = assigneeIdToName[assigneeId];
-    return !name || !allRosterNames.has(name);
-  });
-  const unassignedLine = unassignedIssues.length > 0
-    ? unassignedIssues.map(i => `<${pylonIssueUrl(i.id)}|#${i.number}>`).join(" | ")
-    : "";
+  // SCAN-A now only includes issues assigned to a roster member or the AI agent,
+  // so created.issues contains only roster-member-assigned issues — the unassigned
+  // display is always empty and omitted.
+  const unassignedLine = "";
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
