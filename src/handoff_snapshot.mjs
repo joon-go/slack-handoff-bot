@@ -445,12 +445,24 @@ async function pylonSearch({ token, limit = 200, cursor = null, filter = null })
       continue;
     }
 
+    // Retry transient server errors with exponential backoff.
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      if (attempt >= maxAttempts) {
+        const text = await res.text();
+        throw new Error(`Pylon server error (${res.status}) after ${attempt} attempts: ${text.slice(0, 200)}`);
+      }
+      const retryMs = Math.min(30000, 1000 * 2 ** (attempt - 1));
+      console.warn(`[PYLON] ${res.status} on attempt ${attempt}; retrying in ${retryMs}ms`);
+      await sleep(retryMs);
+      continue;
+    }
+
     const text = await res.text();
     let json;
     try {
       json = JSON.parse(text);
     } catch {
-      throw new Error(`Pylon returned non-JSON (${res.status}): ${text}`);
+      throw new Error(`Pylon returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
     }
 
     if (!res.ok)
