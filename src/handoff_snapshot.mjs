@@ -1161,17 +1161,9 @@ ${newTicketsAssignedPylonBreakdown}
  * counted as new tickets for that shift.
  * We can safely stop paging once oldest created_at < startUtc.
  */
-async function scanCreatedDuringShift({ slot, pylonToken, assigneeNameToId }) {
+async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   const nowPt = ptNow();
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
-
-  // Resolve roster display names to Pylon user IDs once, outside the paging loop.
-  // Using IDs rather than display names makes the check rename-proof.
-  const allRosterIds = new Set(
-    [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])]
-      .map(name => assigneeNameToId[name])
-      .filter(Boolean)
-  );
 
   const createdIds = new Set();
   const createdIssues = []; // human-assigned only (for roster breakdown)
@@ -1266,7 +1258,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, assigneeNameToId }) {
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
  *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }) {
   const nowPt = ptNow();
 
   const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
@@ -1297,7 +1289,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!isTeamL1L2(issue)) continue;
+      const assigneeId = issue?.assignee?.id;
+      if (assigneeId !== AI_SUPPORT_AGENT_ID && !allRosterIds.has(assigneeId)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
@@ -1309,14 +1302,14 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
           id: issue.id,
           number: issue.number,
           priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
+          assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
           meetingRequired: isMeetingRequired(issue),
         });
       }
 
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+      if (assigneeId === AI_SUPPORT_AGENT_ID) {
         aiAgentOpenCount++;
         continue;
       }
@@ -1495,7 +1488,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
  * Checks hand_off_region client-side.
  * No time-based lookback — finds any age handoff issue as long as it's open.
  */
-async function scanHandoffIssues({ pylonToken }) {
+async function scanHandoffIssues({ pylonToken, allRosterIds }) {
   const handoffDisplay = new Map();
   let truncated = false;
 
@@ -1514,7 +1507,7 @@ async function scanHandoffIssues({ pylonToken }) {
 
       for (const issue of data) {
         if (!issue?.id) continue;
-        if (!isTeamL1L2(issue)) continue;
+        if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
@@ -1576,7 +1569,7 @@ async function scanHandoffIssues({ pylonToken }) {
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
  *   P2/P3 (medium/low):  customer last spoke > 3 days ago
  */
-async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
+async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
   const nowPt = ptNow();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
@@ -1599,7 +1592,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!isTeamL1L2(issue)) continue;
+      if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
@@ -1790,6 +1783,14 @@ async function main() {
     );
   }
 
+  // Resolve roster display names to IDs once — used by all four scans.
+  // ID-based matching is rename-proof; names in rosters.json are the source of truth.
+  const allRosterIds = new Set(
+    [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])]
+      .map(name => assigneeNameToId[name])
+      .filter(Boolean)
+  );
+
   // Pass A + audit-log run in parallel — neither depends on the other.
   // Pass A can early-stop once oldest created_at < shift start.
   // Audit log fetches ticket conversion timestamps for enterprise SLA clock correction.
@@ -1797,7 +1798,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, assigneeNameToId }),
+    scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
   ]);
 
@@ -1817,9 +1818,9 @@ async function main() {
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }),
-    scanWaitingOnSupport({ pylonToken, assigneeIdToName }),
-    scanHandoffIssues({ pylonToken }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }),
+    scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
 
   // Merge handoff items collected across all three passes.
