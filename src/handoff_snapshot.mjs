@@ -1785,11 +1785,21 @@ async function main() {
 
   // Resolve roster display names to IDs once — used by all four scans.
   // ID-based matching is rename-proof; names in rosters.json are the source of truth.
+  const allRosterNames = [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])];
   const allRosterIds = new Set(
-    [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])]
+    allRosterNames
       .map(name => assigneeNameToId[name])
       .filter(Boolean)
   );
+
+  // Validate all roster names resolved successfully to prevent silent data loss.
+  const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
+  if (unresolvedNames.length > 0) {
+    throw new Error(
+      `[FATAL] Failed to resolve ${unresolvedNames.length} roster name(s) to assignee IDs: ${unresolvedNames.join(", ")}. ` +
+      "This indicates a Pylon-side rename or typo in rosters.json. Update rosters.json to match current Pylon assignee names."
+    );
+  }
 
   // Pass A + audit-log run in parallel — neither depends on the other.
   // Pass A can early-stop once oldest created_at < shift start.
