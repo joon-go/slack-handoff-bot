@@ -445,12 +445,24 @@ async function pylonSearch({ token, limit = 200, cursor = null, filter = null })
       continue;
     }
 
+    // Retry transient server errors with exponential backoff.
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      if (attempt >= maxAttempts) {
+        const text = await res.text();
+        throw new Error(`Pylon server error (${res.status}) after ${attempt} attempts: ${text.slice(0, 200)}`);
+      }
+      const retryMs = Math.min(30000, 1000 * 2 ** (attempt - 1));
+      console.warn(`[PYLON] ${res.status} on attempt ${attempt}; retrying in ${retryMs}ms`);
+      await sleep(retryMs);
+      continue;
+    }
+
     const text = await res.text();
     let json;
     try {
       json = JSON.parse(text);
     } catch {
-      throw new Error(`Pylon returned non-JSON (${res.status}): ${text}`);
+      throw new Error(`Pylon returned non-JSON (${res.status}): ${text.slice(0, 200)}`);
     }
 
     if (!res.ok)
@@ -1149,16 +1161,9 @@ ${newTicketsAssignedPylonBreakdown}
  * counted as new tickets for that shift.
  * We can safely stop paging once oldest created_at < startUtc.
  */
-async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
+async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   const nowPt = ptNow();
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
-
-  // Build the set of all known roster names for assignee matching.
-  const allRosterNames = new Set([
-    ...(REGION_ROSTERS.apac || []),
-    ...(REGION_ROSTERS.emea || []),
-    ...(REGION_ROSTERS.us   || []),
-  ]);
 
   const createdIds = new Set();
   const createdIssues = []; // human-assigned only (for roster breakdown)
@@ -1182,8 +1187,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
       // agent — the Pylon team label is not used as a filter here.
       const assigneeId = issue?.assignee?.id;
       const isAiAgent = assigneeId === AI_SUPPORT_AGENT_ID;
-      const assigneeName = assigneeId ? (assigneeIdToName[assigneeId] ?? null) : null;
-      const isRosterMember = assigneeName != null && allRosterNames.has(assigneeName);
+      const isRosterMember = assigneeId != null && allRosterIds.has(assigneeId);
       if (!isAiAgent && !isRosterMember) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
@@ -1254,7 +1258,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }) {
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
  *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }) {
   const nowPt = ptNow();
 
   const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
@@ -1285,7 +1289,8 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!isTeamL1L2(issue)) continue;
+      const assigneeId = issue?.assignee?.id;
+      if (assigneeId !== AI_SUPPORT_AGENT_ID && !allRosterIds.has(assigneeId)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
@@ -1297,14 +1302,14 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
           id: issue.id,
           number: issue.number,
           priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
+          assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
           meetingRequired: isMeetingRequired(issue),
         });
       }
 
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
-      if (issue?.assignee?.id === AI_SUPPORT_AGENT_ID) {
+      if (assigneeId === AI_SUPPORT_AGENT_ID) {
         aiAgentOpenCount++;
         continue;
       }
@@ -1483,7 +1488,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes 
  * Checks hand_off_region client-side.
  * No time-based lookback — finds any age handoff issue as long as it's open.
  */
-async function scanHandoffIssues({ pylonToken }) {
+async function scanHandoffIssues({ pylonToken, allRosterIds }) {
   const handoffDisplay = new Map();
   let truncated = false;
 
@@ -1502,7 +1507,7 @@ async function scanHandoffIssues({ pylonToken }) {
 
       for (const issue of data) {
         if (!issue?.id) continue;
-        if (!isTeamL1L2(issue)) continue;
+        if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
@@ -1564,7 +1569,7 @@ async function scanHandoffIssues({ pylonToken }) {
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
  *   P2/P3 (medium/low):  customer last spoke > 3 days ago
  */
-async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
+async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
   const nowPt = ptNow();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
@@ -1587,7 +1592,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName }) {
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!isTeamL1L2(issue)) continue;
+      if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
@@ -1770,11 +1775,29 @@ async function main() {
   const { headerLabel } = SLOT_CONFIG[slot];
   const datePt = formatDatePt(ptNow());
 
-  const { assigneeIdToName } = await fetchAssigneeMaps({ pylonToken });
+  const { assigneeIdToName, assigneeNameToId } = await fetchAssigneeMaps({ pylonToken });
   if (Object.keys(assigneeIdToName).length === 0) {
     throw new Error(
       "[FATAL] fetchAssigneeMaps returned an empty map. " +
       "Aborting to avoid posting misleading zeros for new tickets during shift."
+    );
+  }
+
+  // Resolve roster display names to IDs once — used by all four scans.
+  // ID-based matching is rename-proof; names in rosters.json are the source of truth.
+  const allRosterNames = [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])];
+  const allRosterIds = new Set(
+    allRosterNames
+      .map(name => assigneeNameToId[name])
+      .filter(Boolean)
+  );
+
+  // Validate all roster names resolved successfully to prevent silent data loss.
+  const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
+  if (unresolvedNames.length > 0) {
+    throw new Error(
+      `[FATAL] Failed to resolve ${unresolvedNames.length} roster name(s) to assignee IDs: ${unresolvedNames.join(", ")}. ` +
+      "This indicates a Pylon-side rename or typo in rosters.json. Update rosters.json to match current Pylon assignee names."
     );
   }
 
@@ -1785,7 +1808,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, assigneeIdToName }),
+    scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
   ]);
 
@@ -1805,9 +1828,9 @@ async function main() {
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes }),
-    scanWaitingOnSupport({ pylonToken, assigneeIdToName }),
-    scanHandoffIssues({ pylonToken }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }),
+    scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
 
   // Merge handoff items collected across all three passes.
