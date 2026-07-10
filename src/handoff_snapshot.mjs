@@ -1792,13 +1792,13 @@ async function main() {
       .filter(Boolean)
   );
 
-  // Validate all roster names resolved successfully to prevent silent data loss.
+  // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
+  // from all scans, so their issues won't be counted until rosters.json is updated.
   const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
   if (unresolvedNames.length > 0) {
-    throw new Error(
-      `[FATAL] Failed to resolve ${unresolvedNames.length} roster name(s) to assignee IDs: ${unresolvedNames.join(", ")}. ` +
-      "This indicates a Pylon-side rename or typo in rosters.json. Update rosters.json to match current Pylon assignee names."
-    );
+    const warning = `[ROSTER] Could not resolve ${unresolvedNames.length} name(s) to Pylon IDs: ${unresolvedNames.join(", ")}. Their issues will NOT be counted. Update rosters.json to match current Pylon display names.`;
+    console.warn(warning);
+    await postToSlack({ slackToken, text: `:warning: ${warning}` });
   }
 
   // Pass A + audit-log run in parallel — neither depends on the other.
