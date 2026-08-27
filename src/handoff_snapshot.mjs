@@ -1501,11 +1501,11 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
   // so suggestion enrichment needs no additional Pylon requests.
   const issueByNumber = new Map();
   for (const d of p0p1Details.values())
-    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel });
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
   for (const d of slaBreachedDetails.values())
-    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel });
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
   for (const d of entFrPendingDetails.values())
-    issueByNumber.set(d.number, { accountName: d.accountName, priorityLabel: d.priorityLabel });
+    issueByNumber.set(d.number, { accountName: d.accountName, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
 
   return {
     frP0P1: ids.frP0P1.size,
@@ -1553,7 +1553,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
 
         const prioRaw = getPriority(issue);
         const prioLabel = mapPriorityLabel(prioRaw);
-        issueByNumber.set(issue.number, { accountName: null, priorityLabel: prioLabel });
+        issueByNumber.set(issue.number, { accountName: null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
@@ -1774,7 +1774,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
   const issueByNumber = new Map();
   for (const c of allWaitCandidates.values())
-    issueByNumber.set(c.number, { accountName: null, priorityLabel: c.priorityLabel });
+    issueByNumber.set(c.number, { accountName: null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
 
   return {
     waitP0P1: ids.waitP0P1.size,
@@ -1897,9 +1897,12 @@ async function main() {
   ]);
 
   // Enrich and filter suggestions from scan data — no extra Pylon requests.
-  // Suggestions with no matching open issue (closed/unknown state) are dropped.
+  // Drop suggestions where the issue is closed/unknown-state or has been reassigned.
   const enrichedSuggestions = slotSuggestions
-    .filter(s => issueByNumber.has(s.issueNumber))
+    .filter(s => {
+      const info = issueByNumber.get(s.issueNumber);
+      return info !== undefined && info.assigneeId === s.assigneeId;
+    })
     .map(s => {
       const info = issueByNumber.get(s.issueNumber);
       return { ...s, account: info.accountName ?? null, priority: info.priorityLabel ?? null };
