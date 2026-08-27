@@ -1886,6 +1886,9 @@ async function main() {
     await postToSlack({ slackToken, text: `:warning: ${warning}` });
   }
 
+  const _rawLookback = Number(process.env.SCAN_B_LOOKBACK_DAYS);
+  const scanBLookbackDays = Number.isFinite(_rawLookback) && _rawLookback > 0 ? _rawLookback : 90;
+
   // Pass A + audit-log run in parallel — neither depends on the other.
   // Pass A can early-stop once oldest created_at < shift start.
   // Audit log fetches ticket conversion timestamps for enterprise SLA clock correction.
@@ -1894,7 +1897,7 @@ async function main() {
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
     scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
-    fetchTicketConversionTimes({ pylonToken, lookbackDays: Number(process.env.SCAN_B_LOOKBACK_DAYS) || 90 }),
+    fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
 
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
