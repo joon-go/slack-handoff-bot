@@ -48,7 +48,8 @@ async function searchRateLimit() {
 
 async function pylonPostSearch(token, body) {
   const path = "/issues/search";
-  while (true) {
+  const MAX_429_RETRIES = 3;
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
     await searchRateLimit();
     const res = await fetch(`${PYLON_API_BASE}${path}`, {
       method: "POST",
@@ -56,8 +57,9 @@ async function pylonPostSearch(token, body) {
       body: JSON.stringify(body),
     });
     if (res.status === 429) {
+      if (attempt === MAX_429_RETRIES) throw new Error(`Pylon POST ${path} → 429 after ${MAX_429_RETRIES} retries`);
       const retryAfter = parseInt(res.headers.get("Retry-After") || "60", 10);
-      console.warn(`[RATE LIMIT] /issues/search 429, retrying after ${retryAfter}s`);
+      console.warn(`[RATE LIMIT] /issues/search 429, retrying after ${retryAfter}s (attempt ${attempt + 1}/${MAX_429_RETRIES})`);
       await sleep(retryAfter * 1000);
       continue;
     }
