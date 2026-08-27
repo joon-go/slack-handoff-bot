@@ -46,6 +46,15 @@ async function searchRateLimit() {
   lastSearchCallMs = Date.now();
 }
 
+function parseRetryAfterMs(header, fallbackMs = 60_000) {
+  if (!header) return fallbackMs;
+  const numeric = Number(header);
+  if (Number.isFinite(numeric)) return numeric * 1000;
+  const date = Date.parse(header);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return fallbackMs;
+}
+
 async function pylonPostSearch(token, body) {
   const path = "/issues/search";
   const MAX_429_RETRIES = 3;
@@ -58,9 +67,9 @@ async function pylonPostSearch(token, body) {
     });
     if (res.status === 429) {
       if (attempt === MAX_429_RETRIES) throw new Error(`Pylon POST ${path} → 429 after ${MAX_429_RETRIES} retries`);
-      const retryAfter = parseInt(res.headers.get("Retry-After") || "60", 10);
-      console.warn(`[RATE LIMIT] /issues/search 429, retrying after ${retryAfter}s (attempt ${attempt + 1}/${MAX_429_RETRIES})`);
-      await sleep(retryAfter * 1000);
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
+      console.warn(`[RATE LIMIT] /issues/search 429, retrying after ${retryAfterMs / 1000}s (attempt ${attempt + 1}/${MAX_429_RETRIES})`);
+      await sleep(retryAfterMs);
       continue;
     }
     if (!res.ok) throw new Error(`Pylon POST ${path} → ${res.status}`);
