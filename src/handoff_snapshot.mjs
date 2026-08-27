@@ -534,32 +534,6 @@ async function fetchAccountName({ pylonToken, accountId }) {
   }
 }
 
-/**
- * Fetch a single issue by its display number, returning account name and priority.
- * Returns null if not found or on error.
- */
-async function fetchIssueByNumber({ pylonToken, issueNumber }) {
-  try {
-    const resp = await pylonSearch({
-      token: pylonToken,
-      limit: 1,
-      filter: { field: "number", operator: "equals", value: issueNumber },
-    });
-    const issue = Array.isArray(resp.data) ? resp.data[0] : null;
-    if (!issue) return null;
-    const accountId = issue?.account?.id ?? null;
-    const accountName = accountId
-      ? await fetchAccountName({ pylonToken, accountId })
-      : null;
-    return {
-      accountName,
-      priorityLabel: mapPriorityLabel(getPriority(issue)),
-    };
-  } catch (err) {
-    console.warn(`[SUGGESTION] Could not fetch issue #${issueNumber}: ${err?.message || err}`);
-    return null;
-  }
-}
 
 /**
  * Determine if a message author is a customer.
@@ -1522,6 +1496,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       ? buildEntFrPendingLines(Array.from(entFrPendingDetails.values()), assigneeIdToName)
       : "";
 
+  // Pre-build a number→{accountName, priorityLabel} lookup from already-resolved scan data
+  // so suggestion enrichment needs no additional Pylon requests.
+  const issueByNumber = new Map();
+  for (const d of p0p1Details.values())
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel });
+  for (const d of slaBreachedDetails.values())
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel });
+  for (const d of entFrPendingDetails.values())
+    issueByNumber.set(d.number, { accountName: d.accountName, priorityLabel: d.priorityLabel });
+
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
@@ -1531,6 +1515,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
     handoffItems,
+    issueByNumber,
     truncated,
   };
 }
@@ -1854,21 +1839,6 @@ async function main() {
   const allSuggestions = loadHandoffSuggestions();
   const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
 
-  // Enrich each suggestion with live account name and priority from Pylon.
-  if (slotSuggestions.length > 0) {
-    console.log(`[SUGGESTION] Fetching account/priority for ${slotSuggestions.length} suggestion(s)...`);
-    for (const s of slotSuggestions) {
-      const info = await fetchIssueByNumber({ pylonToken, issueNumber: s.issueNumber });
-      s.account = info?.accountName ?? null;
-      s.priority = info?.priorityLabel ?? null;
-      await sleep(200);
-    }
-  }
-
-  const handoffSuggestionLines = slotSuggestions.length > 0
-    ? buildHandoffSuggestionLines(slotSuggestions, assigneeIdToName)
-    : null;
-
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
   // from all scans, so their issues won't be counted until rosters.json is updated.
   const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
@@ -1909,6 +1879,16 @@ async function main() {
     scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }),
     scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
+
+  // Enrich suggestions from the already-resolved scan data — no extra Pylon requests.
+  for (const s of slotSuggestions) {
+    const info = metrics.issueByNumber.get(s.issueNumber);
+    s.account = info?.accountName ?? null;
+    s.priority = info?.priorityLabel ?? null;
+  }
+  const handoffSuggestionLines = slotSuggestions.length > 0
+    ? buildHandoffSuggestionLines(slotSuggestions, assigneeIdToName)
+    : null;
 
   // Merge handoff items collected across all three passes.
   // SCAN-B covers state=new, SCAN-C covers state=waiting_on_you,
