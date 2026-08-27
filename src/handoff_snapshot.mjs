@@ -535,6 +535,33 @@ async function fetchAccountName({ pylonToken, accountId }) {
 }
 
 /**
+ * Fetch a single issue by its display number, returning account name and priority.
+ * Returns null if not found or on error.
+ */
+async function fetchIssueByNumber({ pylonToken, issueNumber }) {
+  try {
+    const resp = await pylonSearch({
+      token: pylonToken,
+      limit: 1,
+      filter: { field: "number", operator: "equals", value: issueNumber },
+    });
+    const issue = Array.isArray(resp.data) ? resp.data[0] : null;
+    if (!issue) return null;
+    const accountId = issue?.account?.id ?? null;
+    const accountName = accountId
+      ? await fetchAccountName({ pylonToken, accountId })
+      : null;
+    return {
+      accountName,
+      priorityLabel: mapPriorityLabel(getPriority(issue)),
+    };
+  } catch (err) {
+    console.warn(`[SUGGESTION] Could not fetch issue #${issueNumber}: ${err?.message || err}`);
+    return null;
+  }
+}
+
+/**
  * Determine if a message author is a customer.
  * Pylon is inconsistent — some messages have author.contact populated,
  * others use author.type === "contact".  Check both to be safe.
@@ -1826,6 +1853,18 @@ async function main() {
   );
   const allSuggestions = loadHandoffSuggestions();
   const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
+
+  // Enrich each suggestion with live account name and priority from Pylon.
+  if (slotSuggestions.length > 0) {
+    console.log(`[SUGGESTION] Fetching account/priority for ${slotSuggestions.length} suggestion(s)...`);
+    for (const s of slotSuggestions) {
+      const info = await fetchIssueByNumber({ pylonToken, issueNumber: s.issueNumber });
+      s.account = info?.accountName ?? null;
+      s.priority = info?.priorityLabel ?? null;
+      await sleep(200);
+    }
+  }
+
   const handoffSuggestionLines = slotSuggestions.length > 0
     ? buildHandoffSuggestionLines(slotSuggestions, assigneeIdToName)
     : null;
