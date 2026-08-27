@@ -1134,7 +1134,7 @@ ${newTicketsAssignedPylonBreakdown}
   }
 
   if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Handoff Suggestion:*\n${handoffSuggestionLines}`;
+    msg += `\n🔀 *Enterprise Region Mismatch:*\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
