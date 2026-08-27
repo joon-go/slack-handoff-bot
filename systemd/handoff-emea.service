@@ -3,4 +3,4 @@ Description=Handoff snapshot EMEA
 
 [Service]
 ExecStart=/usr/bin/node /opt/handoff/handoff_snapshot.mjs emea
-EnvironmentFile=/opt/handoff/.env
+EnvironmentFile=/home/joon/slack-handoff-bot/.env
