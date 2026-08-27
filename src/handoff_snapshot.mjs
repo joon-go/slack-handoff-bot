@@ -1846,15 +1846,18 @@ async function main() {
     (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
   );
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
-  const idPrefixMap = new Map(
-    Object.keys(assigneeIdToName)
-      .filter(id => id.length > 8)
-      .map(id => [id.slice(0, 8), id])
-  );
-  const allSuggestions = loadHandoffSuggestions().map(s => ({
-    ...s,
-    assigneeId: idPrefixMap.get(s.assigneeId) ?? s.assigneeId,
-  }));
+  // Track all full IDs per prefix so ambiguous prefixes (multiple matches) are rejected.
+  const idPrefixCandidates = new Map();
+  for (const id of Object.keys(assigneeIdToName)) {
+    if (id.length <= 8) continue;
+    const prefix = id.slice(0, 8);
+    if (!idPrefixCandidates.has(prefix)) idPrefixCandidates.set(prefix, []);
+    idPrefixCandidates.get(prefix).push(id);
+  }
+  const allSuggestions = loadHandoffSuggestions().map(s => {
+    const candidates = idPrefixCandidates.get(s.assigneeId);
+    return { ...s, assigneeId: candidates?.length === 1 ? candidates[0] : s.assigneeId };
+  });
   const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
 
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
