@@ -1531,6 +1531,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
  */
 async function scanHandoffIssues({ pylonToken, allRosterIds }) {
   const handoffDisplay = new Map();
+  const issueByNumber = new Map();
   let truncated = false;
 
   for (const state of ["waiting_on_customer", "on_hold"]) {
@@ -1550,11 +1551,13 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
         if (!issue?.id) continue;
         if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
+        const prioRaw = getPriority(issue);
+        const prioLabel = mapPriorityLabel(prioRaw);
+        issueByNumber.set(issue.number, { accountName: null, priorityLabel: prioLabel });
+
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
 
-        const prioRaw = getPriority(issue);
-        const prioLabel = mapPriorityLabel(prioRaw);
         handoffDisplay.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1591,7 +1594,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
 
   console.log(`[SCAN-D] Handoff issues total: ${handoffDisplay.size}`);
 
-  return { handoffItems: handoffDisplay, truncated };
+  return { handoffItems: handoffDisplay, issueByNumber, truncated };
 }
 
 /**
@@ -1769,12 +1772,17 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       ? buildWaitingOnSupportLines(Array.from(waitP2P3Details.values()), assigneeIdToName)
       : "";
 
+  const issueByNumber = new Map();
+  for (const c of allWaitCandidates.values())
+    issueByNumber.set(c.number, { accountName: null, priorityLabel: c.priorityLabel });
+
   return {
     waitP0P1: ids.waitP0P1.size,
     waitP0P1Lines,
     waitP2P3: ids.waitP2P3.size,
     waitP2P3Lines,
     handoffItems,
+    issueByNumber,
     truncated,
   };
 }
@@ -1881,14 +1889,23 @@ async function main() {
     scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
 
-  // Enrich suggestions from the already-resolved scan data — no extra Pylon requests.
-  for (const s of slotSuggestions) {
-    const info = metrics.issueByNumber.get(s.issueNumber);
-    s.account = info?.accountName ?? null;
-    s.priority = info?.priorityLabel ?? null;
-  }
-  const handoffSuggestionLines = slotSuggestions.length > 0
-    ? buildHandoffSuggestionLines(slotSuggestions, assigneeIdToName)
+  // Merge issueByNumber from all three scans; SCAN-B wins (has account names for enterprise).
+  const issueByNumber = new Map([
+    ...waiting.issueByNumber,
+    ...handoff.issueByNumber,
+    ...metrics.issueByNumber,
+  ]);
+
+  // Enrich and filter suggestions from scan data — no extra Pylon requests.
+  // Suggestions with no matching open issue (closed/unknown state) are dropped.
+  const enrichedSuggestions = slotSuggestions
+    .filter(s => issueByNumber.has(s.issueNumber))
+    .map(s => {
+      const info = issueByNumber.get(s.issueNumber);
+      return { ...s, account: info.accountName ?? null, priority: info.priorityLabel ?? null };
+    });
+  const handoffSuggestionLines = enrichedSuggestions.length > 0
+    ? buildHandoffSuggestionLines(enrichedSuggestions, assigneeIdToName)
     : null;
 
   // Merge handoff items collected across all three passes.
