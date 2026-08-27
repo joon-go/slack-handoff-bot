@@ -956,14 +956,15 @@ function buildEntFrPendingLines(list, assigneeIdToName) {
     .join("\n");
 }
 
-function buildHandoffSuggestionLines(suggestions, assigneeIdToName) {
+function buildHandoffSuggestionLines(suggestions, assigneeIdToName, assigneeIdToRegion) {
   return suggestions
     .map((s) => {
       const priority = s.priority || "—";
       const account = s.account || "—";
       const issueLink = `<https://app.usepylon.com/issues?issueNumber=${s.issueNumber}|#${s.issueNumber}>`;
-      const assignee = s.assigneeName || (s.assigneeId ? (assigneeIdToName[s.assigneeId] || s.assigneeId) : "Unassigned");
-      return `${priority} | ${account} | ${issueLink} | Assignee: ${assignee} | Region to Reassign: ${s.recommendedRegion} | Confidence: ${s.confidence}`;
+      const assignee = s.assigneeId ? (assigneeIdToName[s.assigneeId] || s.assigneeId) : "Unassigned";
+      const currentRegion = (s.assigneeId && assigneeIdToRegion?.[s.assigneeId]) || "—";
+      return `${priority} | ${account} | ${issueLink} | Assignee: ${assignee} | ${currentRegion} -> ${s.recommendedRegion} | Confidence: ${s.confidence}`;
     })
     .join("\n");
 }
@@ -1133,7 +1134,7 @@ ${newTicketsAssignedPylonBreakdown}
   }
 
   if (handoffSuggestionLines) {
-    msg += `\n🔀 *Handoff Suggestion:*\n${handoffSuggestionLines}`;
+    msg += `\n🔀 *Enterprise Region Mismatch:*\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
@@ -1848,6 +1849,18 @@ async function main() {
   const slotRosterIds = new Set(
     (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
   );
+
+  // Map assigneeId → display region label for the "current → recommended" format.
+  const REGION_LABELS = { apac: "APAC", emea: "EMEA", us: "US" };
+  const assigneeIdToRegion = {};
+  for (const [region, names] of Object.entries(REGION_ROSTERS)) {
+    if (!Array.isArray(names)) continue;
+    const label = REGION_LABELS[region] ?? region.toUpperCase();
+    for (const name of names) {
+      const id = assigneeNameToId[name];
+      if (id) assigneeIdToRegion[id] = label;
+    }
+  }
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
   // Track all full IDs per prefix so ambiguous prefixes (multiple matches) are rejected.
   const idPrefixCandidates = new Map();
@@ -1936,7 +1949,7 @@ async function main() {
       return { ...s, account: info.accountName ?? null, priority: info.priorityLabel ?? null };
     });
   const handoffSuggestionLines = enrichedSuggestions.length > 0
-    ? buildHandoffSuggestionLines(enrichedSuggestions, assigneeIdToName)
+    ? buildHandoffSuggestionLines(enrichedSuggestions, assigneeIdToName, assigneeIdToRegion)
     : null;
 
   // Merge handoff items collected across all three passes.
