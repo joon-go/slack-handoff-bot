@@ -18,6 +18,7 @@
  *   SLACK_CHANNEL=#csorg-support-handoff  # override Slack channel (default: #support-automation-test)
  *   PYLON_MESSAGES_CONCURRENCY=1          # message API fetch concurrency (default 1, keep low)
  *   PYLON_MESSAGES_DELAY_MS=500           # delay between message API calls (default 500ms)
+ *   SCAN_B_LOOKBACK_DAYS=90              # audit-log lookback for ticket conversion times (default 90)
  *
  * Config files:
  *   config/rosters.json  # shift rosters per region (edit without code changes)
@@ -1893,7 +1894,7 @@ async function main() {
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes] = await Promise.all([
     scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
-    fetchTicketConversionTimes({ pylonToken, lookbackDays: 90 }),
+    fetchTicketConversionTimes({ pylonToken, lookbackDays: Number(process.env.SCAN_B_LOOKBACK_DAYS) || 90 }),
   ]);
 
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
