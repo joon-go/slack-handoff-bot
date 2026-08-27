@@ -45,6 +45,7 @@ npm install
 ```
 PYLON_TOKEN=...          # Pylon API bearer token
 SLACK_BOT_TOKEN=...      # Slack bot OAuth token
+SLACK_CHANNEL=...        # Slack channel to post to (default: #support-automation-test)
 SCAN_B_LOOKBACK_DAYS=90  # How far back Scan B pages (days, default 90)
 ```
 
