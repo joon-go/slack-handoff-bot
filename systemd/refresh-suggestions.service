@@ -3,8 +3,6 @@ Description=Refresh enterprise region mismatch suggestions
 
 [Service]
 Type=oneshot
-Environment=PYLON_TOKEN="<your-pylon-token>"
-Environment=SLACK_BOT_TOKEN="<your-slack-bot-token>"
-Environment=SLACK_CHANNEL=#csorg-support-handoff
+EnvironmentFile=/home/joon/slack-handoff-bot/.env
 WorkingDirectory=/home/joon/slack-handoff-bot
 ExecStart=/usr/bin/node src/refresh_suggestions.mjs
