@@ -1,8 +1,11 @@
 {
-  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
-  "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie"],
-  "us": ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry", "David Chau"],
-  "shift_lead_roster": {},
+  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
+  "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie", "Syed Haque", "Mohan Kumar C S"],
+  "us": ["Tassia Shibuya", "Fariha", "Tim", "David Chau"],
+  "shift_lead_roster": {
+    "us":   ["Tassia Shibuya", "Fariha", "Tim"],
+    "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"]
+  },
   "shift_lead_anchor": {
     "us":   { "name": "Tassia Shibuya",   "year": 2026, "month": 5 },
     "emea": { "name": "Tommy Lundy",      "year": 2026, "month": 5 },

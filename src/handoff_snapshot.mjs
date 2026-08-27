@@ -169,6 +169,17 @@ function loadRosters() {
 
 const REGION_ROSTERS = loadRosters();
 
+function loadHandoffSuggestions() {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const configPath = resolve(__dirname, "..", "config", "handoff_suggestions.json");
+    const raw = readFileSync(configPath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
 // Saved views (Slack hyperlinks)
 const SLACK_LINKS = {
   handoffIssues: "https://app.usepylon.com/issues/views/e799d418-120d-4849-bf81-37d5afdba15c",
@@ -943,6 +954,18 @@ function buildEntFrPendingLines(list, assigneeIdToName) {
     .join("\n");
 }
 
+function buildHandoffSuggestionLines(suggestions, assigneeIdToName) {
+  return suggestions
+    .map((s) => {
+      const priority = s.priority || "—";
+      const account = s.account || "—";
+      const issueLink = `<https://app.usepylon.com/issues?issueNumber=${s.issueNumber}|#${s.issueNumber}>`;
+      const assignee = s.assigneeName || (s.assigneeId ? (assigneeIdToName[s.assigneeId] || s.assigneeId) : "Unassigned");
+      return `${priority} | ${account} | ${issueLink} | Assignee: ${assignee} | Region to Reassign: ${s.recommendedRegion} | Confidence: ${s.confidence}`;
+    })
+    .join("\n");
+}
+
 function buildSlaBreachedLines(list, assigneeIdToName) {
   const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
   return sorted
@@ -1064,6 +1087,7 @@ function buildSlackHandoffMessage({
   newTicketsAssignedPylonBreakdown,
   entFrPending,
   entFrPendingLines,
+  handoffSuggestionLines,
   frP0P1,
   frP2P3,
   slaBreached,
@@ -1104,6 +1128,10 @@ ${newTicketsAssignedPylonBreakdown}
 
   if (entFrPending > 0 && entFrPendingLines) {
     msg += `\n${entFrPendingLines}`;
+  }
+
+  if (handoffSuggestionLines) {
+    msg += `\n🔀 *Handoff Suggestion:*\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
@@ -1792,6 +1820,16 @@ async function main() {
       .filter(Boolean)
   );
 
+  // Slot-specific roster IDs — used to filter handoff suggestions to this shift's team.
+  const slotRosterIds = new Set(
+    (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
+  );
+  const allSuggestions = loadHandoffSuggestions();
+  const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
+  const handoffSuggestionLines = slotSuggestions.length > 0
+    ? buildHandoffSuggestionLines(slotSuggestions, assigneeIdToName)
+    : null;
+
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
   // from all scans, so their issues won't be counted until rosters.json is updated.
   const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
@@ -1870,6 +1908,7 @@ async function main() {
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
+    handoffSuggestionLines,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,

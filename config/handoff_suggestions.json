@@ -1,0 +1,19 @@
+[
+  {"issueNumber": 30662, "priority": "", "account": "Soderberg Partners", "assigneeId": "f7b54b7f", "assigneeName": "Saurabh Lambe", "recommendedRegion": "EMEA UK", "confidence": "High"},
+  {"issueNumber": 30665, "priority": "", "account": "Soderberg Partners", "assigneeId": "bf0f8c2c", "assigneeName": "Chinmay Koratkar", "recommendedRegion": "EMEA UK", "confidence": "High"},
+  {"issueNumber": 30479, "priority": "", "account": "Wayfair", "assigneeId": "61d12c13", "assigneeName": "Syed Haque", "recommendedRegion": "US East", "confidence": "High"},
+  {"issueNumber": 31285, "priority": "", "account": "", "assigneeId": "bb63a829", "assigneeName": "Fariha", "recommendedRegion": "APAC Australia", "confidence": "High"},
+  {"issueNumber": 22758, "priority": "", "account": "NetSPI", "assigneeId": "923cae93", "assigneeName": "Stacie", "recommendedRegion": "US West", "confidence": "High"},
+  {"issueNumber": 22182, "priority": "", "account": "MyHeritage", "assigneeId": "923cae93", "assigneeName": "Stacie", "recommendedRegion": "APAC India", "confidence": "High"},
+  {"issueNumber": 31091, "priority": "", "account": "", "assigneeId": "e0c5c9df", "assigneeName": "David Chau", "recommendedRegion": "US West", "confidence": "High"},
+  {"issueNumber": 30648, "priority": "", "account": "", "assigneeId": "9404fb4f", "assigneeName": "Mohan Kumar C S", "recommendedRegion": "APAC Australia", "confidence": "High"},
+  {"issueNumber": 27346, "priority": "", "account": "", "assigneeId": "923cae93", "assigneeName": "Stacie", "recommendedRegion": "APAC India", "confidence": "High"},
+  {"issueNumber": 30701, "priority": "", "account": "NVIDIA", "assigneeId": "e0c5c9df", "assigneeName": "David Chau", "recommendedRegion": "EMEA UK", "confidence": "High"},
+  {"issueNumber": 30356, "priority": "", "account": "ROKT", "assigneeId": "761f169c", "assigneeName": "Tim", "recommendedRegion": "US East", "confidence": "High"},
+  {"issueNumber": 31104, "priority": "", "account": "", "assigneeId": "f7b54b7f", "assigneeName": "Saurabh Lambe", "recommendedRegion": "APAC Australia or US West", "confidence": "Medium"},
+  {"issueNumber": 31110, "priority": "", "account": "", "assigneeId": "b1334766", "assigneeName": "Tommy Lundy", "recommendedRegion": "APAC India", "confidence": "Medium"},
+  {"issueNumber": 25376, "priority": "", "account": "", "assigneeId": "9404fb4f", "assigneeName": "Mohan Kumar C S", "recommendedRegion": "EMEA UK or US East", "confidence": "Low"},
+  {"issueNumber": 30445, "priority": "", "account": "", "assigneeId": "9404fb4f", "assigneeName": "Mohan Kumar C S", "recommendedRegion": "EMEA UK or US East", "confidence": "Low"},
+  {"issueNumber": 24773, "priority": "", "account": "Adyen", "assigneeId": "e0c5c9df", "assigneeName": "David Chau", "recommendedRegion": "APAC", "confidence": "Low"},
+  {"issueNumber": 28252, "priority": "", "account": "", "assigneeId": "9404fb4f", "assigneeName": "Mohan Kumar C S", "recommendedRegion": "APAC Australia or US West", "confidence": "Low"}
+]
