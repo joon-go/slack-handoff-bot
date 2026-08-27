@@ -137,7 +137,7 @@ function inferTimezone(customerMessages) {
 }
 
 async function main() {
-  const pylonToken = requireEnv("PYLON_API_TOKEN");
+  const pylonToken = requireEnv("PYLON_TOKEN");
   const rosters = loadRosters();
 
   const idToName = await fetchAllUsers(pylonToken);
