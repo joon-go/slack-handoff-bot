@@ -174,7 +174,8 @@ function loadHandoffSuggestions() {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const configPath = resolve(__dirname, "..", "config", "handoff_suggestions.json");
     const raw = readFileSync(configPath, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
