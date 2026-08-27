@@ -175,7 +175,7 @@ function loadHandoffSuggestions() {
     const configPath = resolve(__dirname, "..", "config", "handoff_suggestions.json");
     const raw = readFileSync(configPath, "utf8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.filter(s => s !== null && typeof s === "object") : [];
   } catch {
     return [];
   }
