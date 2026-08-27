@@ -169,6 +169,18 @@ function loadRosters() {
 
 const REGION_ROSTERS = loadRosters();
 
+function loadHandoffSuggestions() {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const configPath = resolve(__dirname, "..", "config", "handoff_suggestions.json");
+    const raw = readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(s => s !== null && typeof s === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
 // Saved views (Slack hyperlinks)
 const SLACK_LINKS = {
   handoffIssues: "https://app.usepylon.com/issues/views/e799d418-120d-4849-bf81-37d5afdba15c",
@@ -522,6 +534,7 @@ async function fetchAccountName({ pylonToken, accountId }) {
     }
   }
 }
+
 
 /**
  * Determine if a message author is a customer.
@@ -943,6 +956,18 @@ function buildEntFrPendingLines(list, assigneeIdToName) {
     .join("\n");
 }
 
+function buildHandoffSuggestionLines(suggestions, assigneeIdToName) {
+  return suggestions
+    .map((s) => {
+      const priority = s.priority || "—";
+      const account = s.account || "—";
+      const issueLink = `<https://app.usepylon.com/issues?issueNumber=${s.issueNumber}|#${s.issueNumber}>`;
+      const assignee = s.assigneeName || (s.assigneeId ? (assigneeIdToName[s.assigneeId] || s.assigneeId) : "Unassigned");
+      return `${priority} | ${account} | ${issueLink} | Assignee: ${assignee} | Region to Reassign: ${s.recommendedRegion} | Confidence: ${s.confidence}`;
+    })
+    .join("\n");
+}
+
 function buildSlaBreachedLines(list, assigneeIdToName) {
   const sorted = [...list].sort((a, b) => priorityRank(a.priorityLabel) - priorityRank(b.priorityLabel));
   return sorted
@@ -1064,6 +1089,7 @@ function buildSlackHandoffMessage({
   newTicketsAssignedPylonBreakdown,
   entFrPending,
   entFrPendingLines,
+  handoffSuggestionLines,
   frP0P1,
   frP2P3,
   slaBreached,
@@ -1104,6 +1130,10 @@ ${newTicketsAssignedPylonBreakdown}
 
   if (entFrPending > 0 && entFrPendingLines) {
     msg += `\n${entFrPendingLines}`;
+  }
+
+  if (handoffSuggestionLines) {
+    msg += `\n🔀 *Handoff Suggestion:*\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
@@ -1467,6 +1497,16 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       ? buildEntFrPendingLines(Array.from(entFrPendingDetails.values()), assigneeIdToName)
       : "";
 
+  // Pre-build a number→{accountName, priorityLabel} lookup from already-resolved scan data
+  // so suggestion enrichment needs no additional Pylon requests.
+  const issueByNumber = new Map();
+  for (const d of p0p1Details.values())
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+  for (const d of slaBreachedDetails.values())
+    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+  for (const d of entFrPendingDetails.values())
+    issueByNumber.set(d.number, { accountName: d.accountName, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+
   return {
     frP0P1: ids.frP0P1.size,
     frP2P3: ids.frP2P3.size,
@@ -1476,6 +1516,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
     entFrPending: entFrPendingDetails.size,
     entFrPendingLines,
     handoffItems,
+    issueByNumber,
     truncated,
   };
 }
@@ -1490,6 +1531,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
  */
 async function scanHandoffIssues({ pylonToken, allRosterIds }) {
   const handoffDisplay = new Map();
+  const issueByNumber = new Map();
   let truncated = false;
 
   for (const state of ["waiting_on_customer", "on_hold"]) {
@@ -1509,11 +1551,13 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
         if (!issue?.id) continue;
         if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
+        const prioRaw = getPriority(issue);
+        const prioLabel = mapPriorityLabel(prioRaw);
+        issueByNumber.set(issue.number, { accountName: null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
+
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
 
-        const prioRaw = getPriority(issue);
-        const prioLabel = mapPriorityLabel(prioRaw);
         handoffDisplay.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1550,7 +1594,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
 
   console.log(`[SCAN-D] Handoff issues total: ${handoffDisplay.size}`);
 
-  return { handoffItems: handoffDisplay, truncated };
+  return { handoffItems: handoffDisplay, issueByNumber, truncated };
 }
 
 /**
@@ -1728,12 +1772,17 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       ? buildWaitingOnSupportLines(Array.from(waitP2P3Details.values()), assigneeIdToName)
       : "";
 
+  const issueByNumber = new Map();
+  for (const c of allWaitCandidates.values())
+    issueByNumber.set(c.number, { accountName: null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
+
   return {
     waitP0P1: ids.waitP0P1.size,
     waitP0P1Lines,
     waitP2P3: ids.waitP2P3.size,
     waitP2P3Lines,
     handoffItems,
+    issueByNumber,
     truncated,
   };
 }
@@ -1792,6 +1841,13 @@ async function main() {
       .filter(Boolean)
   );
 
+  // Slot-specific roster IDs — used to filter handoff suggestions to this shift's team.
+  const slotRosterIds = new Set(
+    (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
+  );
+  const allSuggestions = loadHandoffSuggestions();
+  const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
+
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
   // from all scans, so their issues won't be counted until rosters.json is updated.
   const unresolvedNames = allRosterNames.filter(name => !assigneeNameToId[name]);
@@ -1833,6 +1889,28 @@ async function main() {
     scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
 
+  // Merge issueByNumber from all three scans; SCAN-B wins (has account names for enterprise).
+  const issueByNumber = new Map([
+    ...waiting.issueByNumber,
+    ...handoff.issueByNumber,
+    ...metrics.issueByNumber,
+  ]);
+
+  // Enrich and filter suggestions from scan data — no extra Pylon requests.
+  // Drop suggestions where the issue is closed/unknown-state or has been reassigned.
+  const enrichedSuggestions = slotSuggestions
+    .filter(s => {
+      const info = issueByNumber.get(s.issueNumber);
+      return info !== undefined && info.assigneeId === s.assigneeId;
+    })
+    .map(s => {
+      const info = issueByNumber.get(s.issueNumber);
+      return { ...s, account: info.accountName ?? null, priority: info.priorityLabel ?? null };
+    });
+  const handoffSuggestionLines = enrichedSuggestions.length > 0
+    ? buildHandoffSuggestionLines(enrichedSuggestions, assigneeIdToName)
+    : null;
+
   // Merge handoff items collected across all three passes.
   // SCAN-B covers state=new, SCAN-C covers state=waiting_on_you,
   // SCAN-D covers state=waiting_on_customer and state=on_hold.
@@ -1870,6 +1948,7 @@ async function main() {
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
+    handoffSuggestionLines,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
