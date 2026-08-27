@@ -280,7 +280,7 @@ main().catch(async (err) => {
   const channel = process.env.SLACK_CHANNEL || "#support-automation-test";
   if (slackToken) {
     try {
-      await fetch("https://slack.com/api/chat.postMessage", {
+      const slackRes = await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
         headers: { Authorization: `Bearer ${slackToken}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -289,6 +289,9 @@ main().catch(async (err) => {
           unfurl_links: false,
         }),
       });
+      if (!slackRes.ok) throw new Error(`HTTP ${slackRes.status}`);
+      const slackJson = await slackRes.json();
+      if (!slackJson.ok) throw new Error(slackJson.error ?? "unknown Slack error");
     } catch (slackErr) {
       console.error("[SLACK] Failed to post crash notification:", slackErr?.message);
     }
