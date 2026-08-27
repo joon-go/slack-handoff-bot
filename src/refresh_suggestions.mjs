@@ -4,7 +4,7 @@
  * config/handoff_suggestions.json. Designed to run 1 hour before each
  * handoff slot (02:00, 09:00, 17:00 America/Los_Angeles).
  *
- * Usage: PYLON_API_TOKEN=<token> node src/refresh_suggestions.mjs
+ * Usage: PYLON_TOKEN=<token> node src/refresh_suggestions.mjs
  */
 
 import { writeFileSync } from "fs";
@@ -34,8 +34,37 @@ const REGION_WINDOWS = {
 
 const OPEN_STATES = ["new", "waiting_on_customer", "waiting_on_you", "on_hold"];
 const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
+const SEARCH_MIN_INTERVAL_MS = 3000;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Shared rate limiter: enforces minimum 3s between POST /issues/search calls
+let lastSearchCallMs = 0;
+async function searchRateLimit() {
+  const wait = SEARCH_MIN_INTERVAL_MS - (Date.now() - lastSearchCallMs);
+  if (wait > 0) await sleep(wait);
+  lastSearchCallMs = Date.now();
+}
+
+async function pylonPostSearch(token, body) {
+  const path = "/issues/search";
+  while (true) {
+    await searchRateLimit();
+    const res = await fetch(`${PYLON_API_BASE}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get("Retry-After") || "60", 10);
+      console.warn(`[RATE LIMIT] /issues/search 429, retrying after ${retryAfter}s`);
+      await sleep(retryAfter * 1000);
+      continue;
+    }
+    if (!res.ok) throw new Error(`Pylon POST ${path} → ${res.status}`);
+    return res.json();
+  }
+}
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -67,26 +96,41 @@ async function pylonGet(token, path) {
 }
 
 async function fetchAllUsers(token) {
-  const json = await pylonGet(token, "/users");
   const idToName = {};
-  for (const u of json?.data ?? []) {
-    const display =
-      (typeof u?.name === "string" && u.name.trim()) ||
-      (typeof u?.email === "string" && u.email.trim()) ||
-      u?.id;
-    if (u?.id) idToName[u.id] = display;
+  let cursor = null;
+  while (true) {
+    const path = cursor ? `/users?cursor=${encodeURIComponent(cursor)}` : "/users";
+    const json = await pylonGet(token, path);
+    for (const u of json?.data ?? []) {
+      const display =
+        (typeof u?.name === "string" && u.name.trim()) ||
+        (typeof u?.email === "string" && u.email.trim()) ||
+        u?.id;
+      if (u?.id) idToName[u.id] = display;
+    }
+    if (!json?.pagination?.has_next_page || !json?.pagination?.cursor) break;
+    cursor = json.pagination.cursor;
   }
   return idToName;
 }
 
 async function fetchMessages(token, issueId) {
-  try {
-    const json = await pylonGet(token, `/issues/${issueId}/messages`);
-    return Array.isArray(json?.data) ? json.data : [];
-  } catch (err) {
-    console.warn(`[MESSAGES] ${issueId}: ${err?.message}`);
-    return [];
+  const MAX_RETRIES = 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const json = await pylonGet(token, `/issues/${issueId}/messages`);
+      return Array.isArray(json?.data) ? json.data : [];
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_RETRIES) {
+        console.warn(`[MESSAGES] ${issueId} attempt ${attempt} failed: ${err?.message}, retrying...`);
+        await sleep(1000 * attempt);
+      }
+    }
   }
+  console.error(`[MESSAGES] ${issueId}: all retries failed: ${lastErr?.message}`);
+  throw lastErr;
 }
 
 function isEnterpriseTier(tier) {
@@ -164,9 +208,8 @@ async function main() {
     let page = 0;
     while (true) {
       page++;
-      const resp = await pylonPost(
+      const resp = await pylonPostSearch(
         pylonToken,
-        "/issues/search",
         { limit: 200, ...(cursor ? { cursor } : {}), filter: { field: "state", operator: "equals", value: state } }
       );
       const data = Array.isArray(resp?.data) ? resp.data : [];
@@ -183,7 +226,6 @@ async function main() {
       console.log(`[SCAN] state=${state} page=${page} fetched=${data.length} enterprise=${tickets.size}`);
       if (!resp?.pagination?.has_next_page || !resp?.pagination?.cursor) break;
       cursor = resp.pagination.cursor;
-      await sleep(200);
     }
   }
 

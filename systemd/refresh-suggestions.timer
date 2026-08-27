@@ -2,10 +2,9 @@
 Description=Refresh suggestions 1h before each handoff slot (APAC 03:00, EMEA 10:00, US 18:00)
 
 [Timer]
-OnCalendar=*-*-* 02:00:00
-OnCalendar=*-*-* 09:00:00
-OnCalendar=*-*-* 17:00:00
-Timezone=America/Los_Angeles
+OnCalendar=*-*-* 02:00:00 America/Los_Angeles
+OnCalendar=*-*-* 09:00:00 America/Los_Angeles
+OnCalendar=*-*-* 17:00:00 America/Los_Angeles
 Persistent=true
 
 [Install]
