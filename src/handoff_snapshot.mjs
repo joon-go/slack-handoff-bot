@@ -1367,6 +1367,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
             timeRemainingSeconds: p0p1TimeRemaining,
             isCalendar: p0p1Coverage !== "biz",
             assigneeId: issue?.assignee?.id ?? null,
+            accountId: issue?.account?.id ?? null,
             subject: issue?.title ?? "(No subject)",
           });
         }
@@ -1407,6 +1408,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
               overdueSeconds: elapsed - slaSeconds,
               isCalendar: coverage !== "biz",
               assigneeId: issue?.assignee?.id ?? null,
+              accountId: issue?.account?.id ?? null,
               subject: issue?.title ?? "(No subject)",
             });
           }
@@ -1501,11 +1503,11 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
   // so suggestion enrichment needs no additional Pylon requests.
   const issueByNumber = new Map();
   for (const d of p0p1Details.values())
-    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+    issueByNumber.set(d.number, { accountName: null, accountId: d.accountId ?? null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
   for (const d of slaBreachedDetails.values())
-    issueByNumber.set(d.number, { accountName: null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+    issueByNumber.set(d.number, { accountName: null, accountId: d.accountId ?? null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
   for (const d of entFrPendingDetails.values())
-    issueByNumber.set(d.number, { accountName: d.accountName, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
+    issueByNumber.set(d.number, { accountName: d.accountName, accountId: d.accountId ?? null, priorityLabel: d.priorityLabel, assigneeId: d.assigneeId ?? null });
 
   return {
     frP0P1: ids.frP0P1.size,
@@ -1553,7 +1555,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
 
         const prioRaw = getPriority(issue);
         const prioLabel = mapPriorityLabel(prioRaw);
-        issueByNumber.set(issue.number, { accountName: null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
+        issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
         const slug = getHandoffRegionValue(issue);
         if (!slug) continue;
@@ -1662,6 +1664,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
         prioRaw,
         tier: tierRaw.replace(/-/g, "_"),
         assigneeId: issue?.assignee?.id ?? null,
+        accountId: issue?.account?.id ?? null,
         subject: issue?.title ?? "(No subject)",
       };
 
@@ -1774,7 +1777,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
   const issueByNumber = new Map();
   for (const c of allWaitCandidates.values())
-    issueByNumber.set(c.number, { accountName: null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
+    issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
 
   return {
     waitP0P1: ids.waitP0P1.size,
@@ -1908,7 +1911,20 @@ async function main() {
     ...metrics.issueByNumber,
   ]);
 
-  // Enrich and filter suggestions from scan data — no extra Pylon requests.
+  // Resolve account names for suggestion issues not covered by the enterprise scan.
+  // Only fetches for issue numbers that are in slotSuggestions and still missing accountName.
+  const acctCache = new Map();
+  for (const s of slotSuggestions) {
+    const info = issueByNumber.get(s.issueNumber);
+    if (!info || info.accountName || !info.accountId) continue;
+    if (!acctCache.has(info.accountId)) {
+      acctCache.set(info.accountId, await fetchAccountName({ pylonToken, accountId: info.accountId }));
+      await sleep(100);
+    }
+    info.accountName = acctCache.get(info.accountId) ?? null;
+  }
+
+  // Enrich and filter suggestions from scan data.
   // Drop suggestions where the issue is closed/unknown-state or has been reassigned.
   const enrichedSuggestions = slotSuggestions
     .filter(s => {
