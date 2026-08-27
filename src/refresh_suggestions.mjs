@@ -232,7 +232,24 @@ async function main() {
   console.log(`[DONE] Wrote ${suggestions.length} entries to ${outPath}`);
 }
 
-main().catch(err => {
+main().catch(async (err) => {
   console.error("[FATAL]", err);
+  const slackToken = process.env.SLACK_BOT_TOKEN;
+  const channel = process.env.SLACK_CHANNEL || "#support-automation-test";
+  if (slackToken) {
+    try {
+      await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${slackToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel,
+          text: `:x: *Refresh suggestions crashed*\n\`\`\`${err?.message ?? String(err)}\`\`\``,
+          unfurl_links: false,
+        }),
+      });
+    } catch (slackErr) {
+      console.error("[SLACK] Failed to post crash notification:", slackErr?.message);
+    }
+  }
   process.exit(1);
 });
