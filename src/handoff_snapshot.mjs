@@ -1864,12 +1864,12 @@ async function main() {
     }
   }
 
-  // TZ window labels (from refresh_suggestions.mjs) that belong to each slot region.
-  // "APAC" covers any generic APAC label in addition to the specific sub-region windows.
+  // TZ window labels for the region this slot hands OFF TO.
+  // us→APAC, apac→EMEA, emea→US so each summary surfaces issues to reassign to the incoming team.
   const SLOT_TZ_WINDOWS = {
-    apac: ["APAC Australia", "APAC India", "APAC"],
-    emea: ["EMEA UK"],
-    us:   ["US East", "US West"],
+    us:   ["APAC Australia", "APAC India", "APAC"],
+    apac: ["EMEA UK"],
+    emea: ["US East", "US West"],
   };
   const slotTzWindows = SLOT_TZ_WINDOWS[slot] || [];
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
