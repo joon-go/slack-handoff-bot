@@ -1092,6 +1092,7 @@ function buildSlackHandoffMessage({
   entFrPending,
   entFrPendingLines,
   handoffSuggestionLines,
+  suggestionCount,
   frP0P1,
   frP2P3,
   slaBreached,
@@ -1135,7 +1136,7 @@ ${newTicketsAssignedPylonBreakdown}
   }
 
   if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Region Mismatch:* ${enrichedSuggestions.length}\n${handoffSuggestionLines}`;
+    msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
@@ -1864,8 +1865,9 @@ async function main() {
   }
 
   // TZ window labels (from refresh_suggestions.mjs) that belong to each slot region.
+  // "APAC" covers any generic APAC label in addition to the specific sub-region windows.
   const SLOT_TZ_WINDOWS = {
-    apac: ["APAC Australia", "APAC India"],
+    apac: ["APAC Australia", "APAC India", "APAC"],
     emea: ["EMEA UK"],
     us:   ["US East", "US West"],
   };
@@ -1885,6 +1887,7 @@ async function main() {
   });
   // Filter to suggestions recommended TO this slot's region (issues to receive, not send).
   const slotSuggestions = allSuggestions.filter(s =>
+    typeof s.recommendedRegion === "string" &&
     slotTzWindows.some(w => s.recommendedRegion.includes(w))
   );
 
@@ -2005,6 +2008,7 @@ async function main() {
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
     handoffSuggestionLines,
+    suggestionCount: enrichedSuggestions.length,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
