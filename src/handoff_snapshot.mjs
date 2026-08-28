@@ -1138,36 +1138,33 @@ ${newTicketsAssignedPylonBreakdown}
     msg += `\n🔀 *Enterprise Region Mismatch:*\n${handoffSuggestionLines}`;
   }
 
-  msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
-
-  if (frP0P1 > 0 && p0p1IssueLines) {
-    msg += `\n${p0p1IssueLines}`;
+  if (frP0P1 > 0) {
+    msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
+    if (p0p1IssueLines) msg += `\n${p0p1IssueLines}`;
   }
 
-  msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
-
-  msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
-
-  if (slaBreached > 0 && slaBreachedLines) {
-    msg += `\n${slaBreachedLines}`;
+  if (frP2P3 > 0) {
+    msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
   }
 
-  msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
-
-  if (waitP0P1 > 0 && waitP0P1Lines) {
-    msg += `\n${waitP0P1Lines}`;
+  if (slaBreached > 0) {
+    msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
+    if (slaBreachedLines) msg += `\n${slaBreachedLines}`;
   }
 
-  msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
-
-  if (waitP2P3 > 0 && waitP2P3Lines) {
-    msg += `\n${waitP2P3Lines}`;
+  if (waitP0P1 > 0) {
+    msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
+    if (waitP0P1Lines) msg += `\n${waitP0P1Lines}`;
   }
 
-  msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
+  if (waitP2P3 > 0) {
+    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
+    if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
+  }
 
-  if (handoffIssues > 0 && handoffIssueLines) {
-    msg += `\n${handoffIssueLines}`;
+  if (handoffIssues > 0) {
+    msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
+    if (handoffIssueLines) msg += `\n${handoffIssueLines}`;
   }
 
   if (truncationWarnings && truncationWarnings.length > 0) {
