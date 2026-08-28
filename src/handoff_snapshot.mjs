@@ -1128,11 +1128,11 @@ AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
 
   msg +=
 `\n*Assigned:*
-${newTicketsAssignedPylonBreakdown}
-🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
+${newTicketsAssignedPylonBreakdown}`;
 
-  if (entFrPending > 0 && entFrPendingLines) {
-    msg += `\n${entFrPendingLines}`;
+  if (entFrPending > 0) {
+    msg += `\n🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
+    if (entFrPendingLines) msg += `\n${entFrPendingLines}`;
   }
 
   if (handoffSuggestionLines) {
