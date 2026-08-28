@@ -1092,6 +1092,7 @@ function buildSlackHandoffMessage({
   entFrPending,
   entFrPendingLines,
   handoffSuggestionLines,
+  suggestionCount,
   frP0P1,
   frP2P3,
   slaBreached,
@@ -1135,7 +1136,7 @@ ${newTicketsAssignedPylonBreakdown}
   }
 
   if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Region Mismatch:*\n${handoffSuggestionLines}`;
+    msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}\n${handoffSuggestionLines}`;
   }
 
   if (frP0P1 > 0) {
@@ -1843,7 +1844,7 @@ async function main() {
       .filter(Boolean)
   );
 
-  // Slot-specific roster IDs — used to filter handoff suggestions to this shift's team.
+  // Slot-specific roster IDs — used elsewhere; kept for reference.
   const slotRosterIds = new Set(
     (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
   );
@@ -1859,6 +1860,15 @@ async function main() {
       if (id) assigneeIdToRegion[id] = label;
     }
   }
+
+  // TZ window labels for the region this slot hands OFF TO.
+  // us→APAC, apac→EMEA, emea→US so each summary surfaces issues to reassign to the incoming team.
+  const SLOT_TZ_WINDOWS = {
+    us:   ["APAC Australia", "APAC India", "APAC"],
+    apac: ["EMEA UK"],
+    emea: ["US East", "US West"],
+  };
+  const slotTzWindows = SLOT_TZ_WINDOWS[slot] || [];
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
   // Track all full IDs per prefix so ambiguous prefixes (multiple matches) are rejected.
   const idPrefixCandidates = new Map();
@@ -1872,7 +1882,11 @@ async function main() {
     const candidates = idPrefixCandidates.get(s.assigneeId);
     return { ...s, assigneeId: candidates?.length === 1 ? candidates[0] : s.assigneeId };
   });
-  const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
+  // Filter to suggestions recommended TO this slot's region (issues to receive, not send).
+  const slotSuggestions = allSuggestions.filter(s =>
+    typeof s.recommendedRegion === "string" &&
+    slotTzWindows.some(w => s.recommendedRegion.includes(w))
+  );
 
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
   // from all scans, so their issues won't be counted until rosters.json is updated.
@@ -1991,6 +2005,7 @@ async function main() {
     entFrPending: metrics.entFrPending,
     entFrPendingLines: metrics.entFrPendingLines,
     handoffSuggestionLines,
+    suggestionCount: enrichedSuggestions.length,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
