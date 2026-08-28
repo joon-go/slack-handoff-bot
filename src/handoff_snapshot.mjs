@@ -1135,7 +1135,7 @@ ${newTicketsAssignedPylonBreakdown}
   }
 
   if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Region Mismatch:*\n${handoffSuggestionLines}`;
+    msg += `\n🔀 *Enterprise Region Mismatch:* ${enrichedSuggestions.length}\n${handoffSuggestionLines}`;
   }
 
   msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
@@ -1846,7 +1846,7 @@ async function main() {
       .filter(Boolean)
   );
 
-  // Slot-specific roster IDs — used to filter handoff suggestions to this shift's team.
+  // Slot-specific roster IDs — used elsewhere; kept for reference.
   const slotRosterIds = new Set(
     (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
   );
@@ -1862,6 +1862,14 @@ async function main() {
       if (id) assigneeIdToRegion[id] = label;
     }
   }
+
+  // TZ window labels (from refresh_suggestions.mjs) that belong to each slot region.
+  const SLOT_TZ_WINDOWS = {
+    apac: ["APAC Australia", "APAC India"],
+    emea: ["EMEA UK"],
+    us:   ["US East", "US West"],
+  };
+  const slotTzWindows = SLOT_TZ_WINDOWS[slot] || [];
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
   // Track all full IDs per prefix so ambiguous prefixes (multiple matches) are rejected.
   const idPrefixCandidates = new Map();
@@ -1875,7 +1883,10 @@ async function main() {
     const candidates = idPrefixCandidates.get(s.assigneeId);
     return { ...s, assigneeId: candidates?.length === 1 ? candidates[0] : s.assigneeId };
   });
-  const slotSuggestions = allSuggestions.filter(s => slotRosterIds.has(s.assigneeId));
+  // Filter to suggestions recommended TO this slot's region (issues to receive, not send).
+  const slotSuggestions = allSuggestions.filter(s =>
+    slotTzWindows.some(w => s.recommendedRegion.includes(w))
+  );
 
   // Warn (non-fatal) when roster names fail to resolve — unresolved members are excluded
   // from all scans, so their issues won't be counted until rosters.json is updated.
