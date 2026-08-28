@@ -1115,7 +1115,7 @@ function buildSlackHandoffMessage({
 
   const frP0P1Label = `<${SLACK_LINKS.frSlaPendingP0P1}|*P0/P1 FR Pending*>`;
   const frP2P3Label = `<${SLACK_LINKS.frSlaPendingP2P3}|*P2/P3 FR Pending*>`;
-  const handoffLabel = `<${SLACK_LINKS.handoffIssues}|*Handoff Issues*>`;
+  const handoffLabel = `<${SLACK_LINKS.handoffIssues}|*Handoff Pending*>`;
 
   const region = regionLabelFromSlot(slot);
 
