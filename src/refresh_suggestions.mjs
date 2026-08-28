@@ -265,6 +265,7 @@ async function main() {
     suggestions.push({
       issueNumber: issue.number,
       assigneeId,
+      state: issue.state ?? null,
       recommendedRegion: tz.windows.join(" or "),
       confidence: tz.confidence,
     });

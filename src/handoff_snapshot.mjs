@@ -957,15 +957,23 @@ function buildEntFrPendingLines(list, assigneeIdToName) {
     .join("\n");
 }
 
+const ISSUE_STATE_LABELS = {
+  new:                  "New",
+  waiting_on_customer:  "Waiting on Customer",
+  waiting_on_you:       "Waiting on Support",
+  on_hold:              "On Hold",
+};
+
 function buildHandoffSuggestionLines(suggestions, assigneeIdToName, assigneeIdToRegion) {
   return suggestions
     .map((s) => {
       const priority = s.priority || "—";
       const account = s.account || "—";
       const issueLink = `<https://app.usepylon.com/issues?issueNumber=${s.issueNumber}|#${s.issueNumber}>`;
+      const status = Object.hasOwn(ISSUE_STATE_LABELS, s.state) ? ISSUE_STATE_LABELS[s.state] : (s.state ?? "—");
       const assignee = s.assigneeId ? (assigneeIdToName[s.assigneeId] || s.assigneeId) : "Unassigned";
       const currentRegion = (s.assigneeId && assigneeIdToRegion?.[s.assigneeId]) || "—";
-      return `${priority} | ${account} | ${issueLink} | Assignee: ${assignee} | ${currentRegion} -> ${s.recommendedRegion} | Confidence: ${s.confidence}`;
+      return `${priority} | ${account} | ${issueLink} | ${status} | Assignee: ${assignee} | ${currentRegion} -> ${s.recommendedRegion} | Confidence: ${s.confidence}`;
     })
     .join("\n");
 }
