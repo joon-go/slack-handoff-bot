@@ -90,11 +90,11 @@ const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 //   unknown          = Unknown                    (confirmed from live data)
 const SLA_SECONDS = {
   //                   P0             P1              P2               P3
-  lite:               [24 * 3600,     24 * 3600,      3 * 8 * 3600,    7 * 8 * 3600 ], // 9-5 biz hrs
+  lite:               [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // legacy Pro model, 9-5 biz hrs
   pro:                [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
-  pro_plus:           [4  * 3600,     8  * 3600,      24 * 3600,       3 * 24 * 3600], // 24x5 weekday hrs
+  pro_plus:           [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // legacy Pro model, 9-5 biz hrs
   enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
-  enterprise_elite:   [1  * 3600,     4  * 3600,      8  * 3600,       24 * 3600    ], // P0 24x7; P1-P3 weekday-only
+  enterprise_elite:   [15 * 60,       60 * 60,        24 * 3600,       2 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
   unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
 };
@@ -104,9 +104,9 @@ const SLA_SECONDS = {
 // "weekday"  = M-F 00:00-24:00 PT (24 h/day) — Pro Plus (24x5)
 // "calendar" = all hours, all days (24x7) — Enterprise tiers, best-effort tiers
 const SLA_COVERAGE = {
-  lite:        ["biz",      "biz",      "biz",      "biz"     ],
+  lite:               ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
-  pro_plus:           ["weekday",  "weekday",  "weekday",  "weekday" ],
+  pro_plus:           ["biz",      "biz",      "biz",      "biz"     ], // legacy Pro model
   enterprise:         ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
   enterprise_elite:   ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
   community:          ["biz",      "biz",      "biz",      "biz"     ],
@@ -875,9 +875,9 @@ function tierDisplayName(slug) {
   switch (slug) {
     case "enterprise_elite": return "Enterprise Elite";
     case "enterprise":       return "Enterprise";
-    case "pro_plus":         return "Pro+";
-    case "pro":              return "Pro";
-    case "lite":      return "Lite";
+    case "pro_plus":         return "Standard (Pro Plus)";
+    case "pro":              return "Standard (Pro)";
+    case "lite":             return "Standard (Lite Pro Legacy)";
     case "community":        return "Community";
     case "unknown":          return "Unknown";
     default:                 return slug;
