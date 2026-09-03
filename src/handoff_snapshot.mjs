@@ -90,10 +90,10 @@ const P2_P3_PRIORITIES = new Set(["medium", "low"]);
 //   unknown          = Unknown                    (confirmed from live data)
 const SLA_SECONDS = {
   //                   P0             P1              P2               P3
-  lite:               [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // legacy Pro model, 9-5 biz hrs
-  pro:                [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // 9-5 biz hrs
-  pro_plus:           [8  * 3600,     16 * 3600,      2 * 8 * 3600,    5 * 8 * 3600 ], // legacy Pro model, 9-5 biz hrs
-  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       3 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
+  lite:               [8  * 3600,     16 * 3600,      2 * 8 * 3600,    2 * 24 * 3600], // legacy Pro model, 9-5 biz hrs
+  pro:                [8  * 3600,     16 * 3600,      2 * 8 * 3600,    2 * 24 * 3600], // 9-5 biz hrs
+  pro_plus:           [8  * 3600,     16 * 3600,      2 * 8 * 3600,    2 * 24 * 3600], // legacy Pro model, 9-5 biz hrs
+  enterprise:         [2  * 3600,     4  * 3600,      24 * 3600,       2 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
   enterprise_elite:   [15 * 60,       60 * 60,        24 * 3600,       2 * 24 * 3600], // P0 24x7; P1-P3 weekday-only
   community:          [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
   unknown:            [24 * 3600,     24 * 3600,      72 * 3600,       72 * 3600    ], // best effort: calendar
