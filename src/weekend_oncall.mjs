@@ -35,11 +35,12 @@ async function pdGet(token, path) {
 async function fetchOncallUser(token, scheduleId, since, until) {
   const params = new URLSearchParams();
   params.append("schedule_ids[]", scheduleId);
+  params.append("include[]", "users"); // expand user objects to include email
   params.set("since", since);
   params.set("until", until);
   params.set("limit", "25");
   const json = await pdGet(token, `/oncalls?${params}`);
-  // Take the lowest escalation level (primary on-call)
+  // Take the primary on-call (lowest escalation level)
   const sorted = (json?.oncalls ?? []).sort(
     (a, b) => (a.escalation_level ?? 99) - (b.escalation_level ?? 99)
   );
@@ -67,10 +68,27 @@ async function postSlackMessage(slackToken, channel, text) {
   return json;
 }
 
+// Returns the UTC timestamp corresponding to midnight America/Los_Angeles
+// on the given PT calendar date, correct across DST transitions.
+function ptMidnightUtc(year, month, day) {
+  // Sample the PT UTC offset at noon on that day (well away from any DST boundary).
+  const noonUtc = new Date(Date.UTC(year, month - 1, day, 12));
+  const tzStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    timeZoneName: "shortOffset",
+    hour: "numeric",
+    hour12: false,
+  })
+    .formatToParts(noonUtc)
+    .find((p) => p.type === "timeZoneName")?.value ?? "GMT-7";
+  const offsetHours = -Number(tzStr.replace("GMT", "") || "-7");
+  return new Date(Date.UTC(year, month - 1, day, offsetHours, 0, 0));
+}
+
 function getWeekendWindow() {
   const now = new Date();
 
-  // Day of week in PT (0=Sun … 6=Sat)
+  // Day of week in PT
   const ptDow = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     weekday: "short",
@@ -78,41 +96,52 @@ function getWeekendWindow() {
   const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(ptDow);
   const daysToSat = ((6 - dowIndex + 7) % 7) || 7;
 
-  const satMs = now.getTime() + daysToSat * 86_400_000;
-  const sat = new Date(satMs);
-  const sun = new Date(satMs + 86_400_000);
-  const mon = new Date(satMs + 2 * 86_400_000);
+  // Approximate next Saturday and Monday by adding days in ms, then read back
+  // the PT calendar date to handle DST correctly.
+  const approxSat = new Date(now.getTime() + daysToSat * 86_400_000);
+  const approxMon = new Date(now.getTime() + (daysToSat + 2) * 86_400_000);
 
-  const ptFmt = new Intl.DateTimeFormat("en-US", {
+  const ptDateFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
+    year: "numeric",
     month: "numeric",
     day: "numeric",
-    year: "numeric",
   });
 
-  return {
-    since: sat.toISOString(),
-    until: mon.toISOString(),
-    label: `${ptFmt.format(sat)}-${ptFmt.format(sun)}`,
-  };
+  function ptParts(d) {
+    return Object.fromEntries(ptDateFmt.formatToParts(d).map((p) => [p.type, p.value]));
+  }
+
+  const satPt  = ptParts(approxSat);
+  const sunPt  = ptParts(new Date(approxSat.getTime() + 86_400_000));
+  const monPt  = ptParts(approxMon);
+
+  const since = ptMidnightUtc(+satPt.year, +satPt.month, +satPt.day).toISOString();
+  const until = ptMidnightUtc(+monPt.year, +monPt.month, +monPt.day).toISOString();
+  const label = `${satPt.month}/${satPt.day}/${satPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`;
+
+  return { since, until, label };
 }
 
 async function resolveEngineer(pdToken, slackToken, scheduleId, since, until) {
   const pdUser = await fetchOncallUser(pdToken, scheduleId, since, until);
   if (!pdUser) return null;
 
-  const name = pdUser.name ?? pdUser.summary ?? "Unknown";
+  const name  = pdUser.name ?? pdUser.summary ?? "Unknown";
   const email = pdUser.email;
 
   if (email) {
-    const slackUser = await lookupSlackUserByEmail(slackToken, email);
-    if (slackUser?.id) {
-      return { mention: `<@${slackUser.id}>`, name };
+    try {
+      const slackUser = await lookupSlackUserByEmail(slackToken, email);
+      if (slackUser?.id) {
+        return { mention: `<@${slackUser.id}>`, name };
+      }
+    } catch (err) {
+      console.warn(`[ONCALL] Slack lookup failed for "${name}": ${err?.message}`);
     }
   }
 
-  // Fallback: plain name if Slack lookup fails
-  console.warn(`[ONCALL] Could not find Slack user for PD user "${name}" (${email ?? "no email"})`);
+  console.warn(`[ONCALL] Falling back to plain name for "${name}" (${email ?? "no email"})`);
   return { mention: name, name };
 }
 
@@ -125,10 +154,11 @@ async function main() {
 
   const pdToken    = process.env.PAGERDUTY_TOKEN;
   const slackToken = process.env.SLACK_BOT_TOKEN;
-  const channel    = process.env.SLACK_CHANNEL || "#support-automation-test";
+  const channel    = process.env.SLACK_CHANNEL;
 
   if (!pdToken)    throw new Error("Missing required env var: PAGERDUTY_TOKEN");
   if (!slackToken) throw new Error("Missing required env var: SLACK_BOT_TOKEN");
+  if (!channel)    throw new Error("Missing required env var: SLACK_CHANNEL");
 
   const scheduleIds = {
     EMEA:     process.env.PD_SCHEDULE_ID_EMEA,
@@ -167,8 +197,8 @@ async function main() {
 main().catch(async (err) => {
   console.error("[FATAL]", err);
   const slackToken = process.env.SLACK_BOT_TOKEN;
-  const channel    = process.env.SLACK_CHANNEL || "#support-automation-test";
-  if (slackToken) {
+  const channel    = process.env.SLACK_CHANNEL;
+  if (slackToken && channel) {
     try {
       await fetch("https://slack.com/api/chat.postMessage", {
         method: "POST",
