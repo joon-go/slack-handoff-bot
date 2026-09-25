@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekend on-call Slack notification
+
+[Service]
+Type=oneshot
+EnvironmentFile=/home/joon/slack-handoff-bot/.env
+WorkingDirectory=/home/joon/slack-handoff-bot
+ExecStart=/usr/bin/node src/weekend_oncall.mjs

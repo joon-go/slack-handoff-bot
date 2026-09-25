@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekend on-call notification every Friday 6pm PT
+
+[Timer]
+OnCalendar=Fri *-*-* 18:00:00 America/Los_Angeles
+Persistent=true
+
+[Install]
+WantedBy=timers.target
