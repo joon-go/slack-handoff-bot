@@ -1,25 +1,49 @@
 #!/usr/bin/env node
 /**
  * Posts weekend on-call engineers to Slack every Friday evening (18:00 PT).
- * Fetches on-call schedules from PagerDuty and @mentions engineers on Slack.
+ * Uses the PagerDuty final schedule (override-aware) and matches each engineer
+ * to their region via rosters.json.
  *
  * Usage: PAGERDUTY_TOKEN=<token> SLACK_BOT_TOKEN=<token> node src/weekend_oncall.mjs
  *
  * Required env vars:
- *   PAGERDUTY_TOKEN         — PagerDuty API v2 token
- *   SLACK_BOT_TOKEN         — Slack bot token (needs users:read, users:read.email, chat:write)
- *   SLACK_CHANNEL           — Slack channel to post to
- *
- * Per-region schedule IDs (at least one required):
- *   PD_SCHEDULE_ID_EMEA     — PagerDuty schedule ID for EMEA on-call
- *   PD_SCHEDULE_ID_AMERICAS — PagerDuty schedule ID for Americas on-call
- *   PD_SCHEDULE_ID_APAC     — PagerDuty schedule ID for APAC on-call
+ *   PAGERDUTY_TOKEN        — PagerDuty API v2 token (read-only)
+ *   SLACK_BOT_TOKEN        — Slack bot token (users:read, users:read.email, chat:write)
+ *   SLACK_CHANNEL          — Slack channel to post to
+ *   PD_SCHEDULE_ID         — PagerDuty schedule ID (e.g. PK0AZIN)
  *
  * Optional:
- *   WEEKEND_ONCALL_ENABLED  — set to "false" to disable without removing the timer
+ *   WEEKEND_ONCALL_ENABLED — set to "false" to disable without removing the timer
  */
 
+import { readFileSync } from "fs";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const PD_API_BASE = "https://api.pagerduty.com";
+
+const REGION_DISPLAY = { us: "Americas", apac: "APAC", emea: "EMEA" };
+const REGION_ORDER   = ["EMEA", "Americas", "APAC"];
+
+function loadRosters() {
+  const path = resolve(__dirname, "..", "config", "rosters.json");
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+// Match a PagerDuty display name to a roster region by comparing leading
+// name tokens. Roster entry "Stacie" matches "Stacie Clere-Enoka" because
+// the PD name starts with the same tokens; "Rob" does NOT match "Robert Norrie".
+function matchRosterRegion(pdName, rosters) {
+  const pdTokens = pdName.toLowerCase().split(/\s+/);
+  for (const region of ["us", "apac", "emea"]) {
+    for (const name of rosters[region] ?? []) {
+      const rosterTokens = name.toLowerCase().split(/\s+/);
+      if (rosterTokens.every((t, i) => pdTokens[i] === t)) return region;
+    }
+  }
+  return null;
+}
 
 async function pdGet(token, path) {
   const res = await fetch(`${PD_API_BASE}${path}`, {
@@ -32,19 +56,16 @@ async function pdGet(token, path) {
   return res.json();
 }
 
-async function fetchOncallUser(token, scheduleId, since, until) {
-  const params = new URLSearchParams();
-  params.append("schedule_ids[]", scheduleId);
-  params.append("include[]", "users"); // expand user objects to include email
-  params.set("since", since);
-  params.set("until", until);
-  params.set("limit", "25");
-  const json = await pdGet(token, `/oncalls?${params}`);
-  // Take the primary on-call (lowest escalation level)
-  const sorted = (json?.oncalls ?? []).sort(
-    (a, b) => (a.escalation_level ?? 99) - (b.escalation_level ?? 99)
-  );
-  return sorted[0]?.user ?? null;
+// Returns the final (override-aware) schedule entries for the given window.
+async function fetchFinalScheduleEntries(token, scheduleId, since, until) {
+  const params = new URLSearchParams({ since, until, time_zone: "UTC" });
+  const json = await pdGet(token, `/schedules/${scheduleId}?${params}`);
+  return json?.schedule?.final_schedule?.rendered_schedule_entries ?? [];
+}
+
+async function fetchUserEmail(token, userId) {
+  const json = await pdGet(token, `/users/${userId}`);
+  return json?.user?.email ?? null;
 }
 
 async function lookupSlackUserByEmail(slackToken, email) {
@@ -68,10 +89,7 @@ async function postSlackMessage(slackToken, channel, text) {
   return json;
 }
 
-// Returns the UTC timestamp corresponding to midnight America/Los_Angeles
-// on the given PT calendar date, correct across DST transitions.
 function ptMidnightUtc(year, month, day) {
-  // Sample the PT UTC offset at noon on that day (well away from any DST boundary).
   const noonUtc = new Date(Date.UTC(year, month - 1, day, 12));
   const tzStr = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -87,8 +105,6 @@ function ptMidnightUtc(year, month, day) {
 
 function getWeekendWindow() {
   const now = new Date();
-
-  // Day of week in PT
   const ptDow = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     weekday: "short",
@@ -96,46 +112,40 @@ function getWeekendWindow() {
   const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(ptDow);
   const daysToSat = ((6 - dowIndex + 7) % 7) || 7;
 
-  // Approximate next Saturday and Monday by adding days in ms, then read back
-  // the PT calendar date to handle DST correctly.
   const approxSat = new Date(now.getTime() + daysToSat * 86_400_000);
   const approxMon = new Date(now.getTime() + (daysToSat + 2) * 86_400_000);
 
   const ptDateFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
+    year: "numeric", month: "numeric", day: "numeric",
   });
+  const ptParts = (d) =>
+    Object.fromEntries(ptDateFmt.formatToParts(d).map((p) => [p.type, p.value]));
 
-  function ptParts(d) {
-    return Object.fromEntries(ptDateFmt.formatToParts(d).map((p) => [p.type, p.value]));
-  }
+  const satPt = ptParts(approxSat);
+  const sunPt = ptParts(new Date(approxSat.getTime() + 86_400_000));
+  const monPt = ptParts(approxMon);
 
-  const satPt  = ptParts(approxSat);
-  const sunPt  = ptParts(new Date(approxSat.getTime() + 86_400_000));
-  const monPt  = ptParts(approxMon);
-
-  const since = ptMidnightUtc(+satPt.year, +satPt.month, +satPt.day).toISOString();
-  const until = ptMidnightUtc(+monPt.year, +monPt.month, +monPt.day).toISOString();
-  const label = `${satPt.month}/${satPt.day}/${satPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`;
-
-  return { since, until, label };
+  return {
+    since: ptMidnightUtc(+satPt.year, +satPt.month, +satPt.day).toISOString(),
+    until: ptMidnightUtc(+monPt.year, +monPt.month, +monPt.day).toISOString(),
+    label: `${satPt.month}/${satPt.day}/${satPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`,
+  };
 }
 
-async function resolveEngineer(pdToken, slackToken, scheduleId, since, until) {
-  const pdUser = await fetchOncallUser(pdToken, scheduleId, since, until);
-  if (!pdUser) return null;
+async function resolveSlackMention(pdToken, slackToken, pdUser) {
+  const name  = pdUser.summary ?? pdUser.name ?? "Unknown";
+  let   email = pdUser.email ?? null;
 
-  const name  = pdUser.name ?? pdUser.summary ?? "Unknown";
-  const email = pdUser.email;
+  if (!email && pdUser.id) {
+    try { email = await fetchUserEmail(pdToken, pdUser.id); }
+    catch (err) { console.warn(`[ONCALL] Could not fetch PD user ${pdUser.id}: ${err?.message}`); }
+  }
 
   if (email) {
     try {
       const slackUser = await lookupSlackUserByEmail(slackToken, email);
-      if (slackUser?.id) {
-        return { mention: `<@${slackUser.id}>`, name };
-      }
+      if (slackUser?.id) return { mention: `<@${slackUser.id}>`, name };
     } catch (err) {
       console.warn(`[ONCALL] Slack lookup failed for "${name}": ${err?.message}`);
     }
@@ -155,42 +165,57 @@ async function main() {
   const pdToken    = process.env.PAGERDUTY_TOKEN;
   const slackToken = process.env.SLACK_BOT_TOKEN;
   const channel    = process.env.SLACK_CHANNEL;
+  const scheduleId = process.env.PD_SCHEDULE_ID;
 
   if (!pdToken)    throw new Error("Missing required env var: PAGERDUTY_TOKEN");
   if (!slackToken) throw new Error("Missing required env var: SLACK_BOT_TOKEN");
   if (!channel)    throw new Error("Missing required env var: SLACK_CHANNEL");
+  if (!scheduleId) throw new Error("Missing required env var: PD_SCHEDULE_ID");
 
-  const scheduleIds = {
-    EMEA:     process.env.PD_SCHEDULE_ID_EMEA,
-    Americas: process.env.PD_SCHEDULE_ID_AMERICAS,
-    APAC:     process.env.PD_SCHEDULE_ID_APAC,
-  };
+  const rosters = loadRosters();
+  const { since, until, label } = getWeekendWindow();
+  console.log(`[ONCALL] Querying schedule ${scheduleId} for ${label} (${since} – ${until})`);
 
-  const configuredRegions = Object.entries(scheduleIds).filter(([, id]) => !!id);
-  if (configuredRegions.length === 0) {
-    throw new Error(
-      "No PagerDuty schedule IDs configured. Set PD_SCHEDULE_ID_EMEA, PD_SCHEDULE_ID_AMERICAS, and/or PD_SCHEDULE_ID_APAC."
-    );
+  const entries = await fetchFinalScheduleEntries(pdToken, scheduleId, since, until);
+  console.log(`[ONCALL] Final schedule entries: ${entries.length}`);
+
+  // Deduplicate by user ID — each engineer appears once per region per weekend.
+  const seen = new Set();
+  const regionMap = {};
+
+  for (const entry of entries) {
+    const pdUser = entry.user;
+    if (!pdUser?.id || seen.has(pdUser.id)) continue;
+    seen.add(pdUser.id);
+
+    const name   = pdUser.summary ?? pdUser.name ?? "";
+    const region = matchRosterRegion(name, rosters);
+    if (!region) {
+      console.warn(`[ONCALL] "${name}" not found in rosters.json — skipping`);
+      continue;
+    }
+
+    const displayRegion = REGION_DISPLAY[region] ?? region;
+    const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
+    regionMap[displayRegion] = engineer;
+    console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
-  const { since, until, label } = getWeekendWindow();
-  console.log(`[ONCALL] Querying on-call for ${label} (${since} – ${until})`);
+  if (Object.keys(regionMap).length === 0) {
+    throw new Error("No on-call entries matched any roster region for the weekend window.");
+  }
+
+  const orderedRegions = [
+    ...REGION_ORDER.filter((r) => regionMap[r]),
+    ...Object.keys(regionMap).filter((r) => !REGION_ORDER.includes(r)),
+  ];
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
-
-  for (const [region, scheduleId] of configuredRegions) {
-    const engineer = await resolveEngineer(pdToken, slackToken, scheduleId, since, until);
-    if (engineer) {
-      lines.push(`${region}: ${engineer.mention}`);
-      console.log(`[ONCALL] ${region}: ${engineer.name}`);
-    } else {
-      lines.push(`${region}: _No on-call found_`);
-      console.warn(`[ONCALL] ${region}: no on-call user found for schedule ${scheduleId}`);
-    }
+  for (const region of orderedRegions) {
+    lines.push(`${region}: ${regionMap[region].mention}`);
   }
 
-  const text = lines.join("\n");
-  await postSlackMessage(slackToken, channel, text);
+  await postSlackMessage(slackToken, channel, lines.join("\n"));
   console.log(`[ONCALL] Posted to ${channel}`);
 }
 
