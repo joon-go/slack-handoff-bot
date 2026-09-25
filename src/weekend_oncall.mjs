@@ -31,15 +31,15 @@ function loadRosters() {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-// Match a PagerDuty display name to a roster region using substring matching.
-// Roster entries like "Stacie" match PD names like "Stacie Clere-Enoka".
+// Match a PagerDuty display name to a roster region by comparing leading
+// name tokens. Roster entry "Stacie" matches "Stacie Clere-Enoka" because
+// the PD name starts with the same tokens; "Rob" does NOT match "Robert Norrie".
 function matchRosterRegion(pdName, rosters) {
-  const lower = pdName.toLowerCase();
+  const pdTokens = pdName.toLowerCase().split(/\s+/);
   for (const region of ["us", "apac", "emea"]) {
     for (const name of rosters[region] ?? []) {
-      if (lower.startsWith(name.toLowerCase()) || lower.includes(name.toLowerCase())) {
-        return region;
-      }
+      const rosterTokens = name.toLowerCase().split(/\s+/);
+      if (rosterTokens.every((t, i) => pdTokens[i] === t)) return region;
     }
   }
   return null;
