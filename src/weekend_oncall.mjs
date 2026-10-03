@@ -39,7 +39,12 @@ function matchRosterRegion(pdName, rosters) {
   for (const region of ["us", "apac", "emea"]) {
     for (const name of rosters[region] ?? []) {
       const rosterTokens = name.toLowerCase().split(/\s+/);
-      if (rosterTokens.every((t, i) => pdTokens[i] === t)) return region;
+      // Compare up to the shorter name's token count so "Mohan Kumar" matches
+      // roster entry "Mohan Kumar C S" when PD omits trailing initials.
+      const cmpLen = Math.min(pdTokens.length, rosterTokens.length);
+      if (cmpLen > 0 && rosterTokens.slice(0, cmpLen).every((t, i) => pdTokens[i] === t)) {
+        return region;
+      }
     }
   }
   return null;
