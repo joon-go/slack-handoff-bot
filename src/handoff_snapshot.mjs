@@ -341,6 +341,12 @@ function isMeetingRequired(issue) {
   return v === true || v === "true";
 }
 
+function hasHandoffTag(issue) {
+  const tags = issue?.tags;
+  if (!Array.isArray(tags)) return false;
+  return tags.some(t => typeof t?.name === "string" && t.name.toLowerCase().includes("handoff"));
+}
+
 /**
  * Open handoff issue predicate:
  * - open state
@@ -639,6 +645,54 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
     const isCustomerLast = isCustomerAuthor(latestPublicMsg);
 
     return { isCustomerLast, latestPublicMsgTime };
+  }
+}
+
+const HANDOFF_MARKER = "<---Ticket Handoff--->";
+
+/**
+ * Returns the body of the last internal (private) comment on an issue,
+ * or null on error / no internal comments.
+ */
+async function fetchLastInternalComment(pylonToken, issueId) {
+  const maxAttempts = 4;
+  let attempt = 0;
+  while (true) {
+    attempt += 1;
+    const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}/messages`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${pylonToken}`, Accept: "application/json" },
+    });
+    if (res.status === 429) {
+      if (attempt >= maxAttempts) {
+        console.warn(`[HANDOFF-MSG] 429 after ${maxAttempts} attempts for issue ${issueId}; skipping`);
+        return null;
+      }
+      await sleep(Math.min(30000, 750 * 2 ** (attempt - 1)));
+      continue;
+    }
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); } catch {
+      console.warn(`[HANDOFF-MSG] Non-JSON for issue ${issueId}: ${text.slice(0, 200)}`);
+      return null;
+    }
+    if (!res.ok) {
+      console.warn(`[HANDOFF-MSG] Failed for issue ${issueId} (${res.status})`);
+      return null;
+    }
+    const messages = Array.isArray(json.data) ? json.data : [];
+    let lastInternal = null;
+    let lastInternalTime = null;
+    for (const msg of messages) {
+      if (!msg.is_private) continue;
+      const t = parseMsgTime(msg);
+      if (t && (!lastInternalTime || t > lastInternalTime)) {
+        lastInternalTime = t;
+        lastInternal = msg;
+      }
+    }
+    return lastInternal?.body ?? null;
   }
 }
 
@@ -1333,9 +1387,10 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff issues regardless of assignee.
+      // Collect handoff candidates: must have handoff region set and "handoff" tag.
+      // Last-internal-comment check is deferred to the post-merge batch.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1566,7 +1621,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
         issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
         const slug = getHandoffRegionValue(issue);
-        if (!slug) continue;
+        if (!slug || !hasHandoffTag(issue)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
@@ -1651,9 +1706,9 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff issues regardless of priority.
+      // Collect handoff candidates: must have handoff region set and "handoff" tag.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1984,6 +2039,21 @@ async function main() {
     ...waiting.handoffItems,
     ...handoff.handoffItems,
   ]);
+
+  // Final filter: last internal comment must contain the handoff marker.
+  if (allHandoffItems.size > 0) {
+    const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
+    console.log(`[HANDOFF] Verifying ${allHandoffItems.size} candidate(s) via internal-comment check...`);
+    for (const [id] of allHandoffItems) {
+      const body = await fetchLastInternalComment(pylonToken, id);
+      if (!body || !body.includes(HANDOFF_MARKER)) {
+        allHandoffItems.delete(id);
+      }
+      await sleep(MSG_DELAY_MS);
+    }
+    console.log(`[HANDOFF] ${allHandoffItems.size} item(s) passed marker check.`);
+  }
+
   const handoffIssues = allHandoffItems.size;
   const handoffIssueLines = handoffIssues > 0
     ? buildHandoffIssueLines(Array.from(allHandoffItems.values()), assigneeIdToName)
