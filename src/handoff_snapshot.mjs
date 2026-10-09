@@ -344,7 +344,10 @@ function isMeetingRequired(issue) {
 function hasHandoffTag(issue) {
   const tags = issue?.tags;
   if (!Array.isArray(tags)) return false;
-  return tags.some(t => typeof t?.name === "string" && t.name.toLowerCase().includes("handoff"));
+  return tags.some(t => {
+    const name = typeof t === "string" ? t : t?.name;
+    return typeof name === "string" && name.toLowerCase().includes("handoff");
+  });
 }
 
 /**
@@ -2045,9 +2048,13 @@ async function main() {
     const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
     console.log(`[HANDOFF] Verifying ${allHandoffItems.size} candidate(s) via internal-comment check...`);
     for (const [id] of allHandoffItems) {
-      const body = await fetchLastInternalComment(pylonToken, id);
-      if (!body || !body.includes(HANDOFF_MARKER)) {
-        allHandoffItems.delete(id);
+      try {
+        const body = await fetchLastInternalComment(pylonToken, id);
+        if (!body || !body.includes(HANDOFF_MARKER)) {
+          allHandoffItems.delete(id);
+        }
+      } catch (err) {
+        console.warn(`[HANDOFF] Unexpected error checking issue ${id}: ${err?.message || err}`);
       }
       await sleep(MSG_DELAY_MS);
     }
