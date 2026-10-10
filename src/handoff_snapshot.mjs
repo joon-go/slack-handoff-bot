@@ -2055,6 +2055,7 @@ async function main() {
         }
       } catch (err) {
         console.warn(`[HANDOFF] Unexpected error checking issue ${id}: ${err?.message || err}`);
+        allHandoffItems.delete(id);
       }
       await sleep(MSG_DELAY_MS);
     }
