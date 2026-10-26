@@ -833,6 +833,110 @@ async function fetchTicketConversionTimes({ pylonToken, lookbackDays }) {
 }
 
 /**
+ * Fetch all "Issue Priority Changed" audit-log events within `lookbackDays`.
+ *
+ * Returns a Map<issueId, latestActionHappenedAtIso> so that SLA elapsed time
+ * is measured from the most recent priority change rather than issue creation.
+ */
+async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
+  const cutoffDt = DateTime.now().minus({ days: lookbackDays }).toUTC();
+  const prioChangeMap = new Map(); // issueId -> latest priority change ISO
+  let cursor = null;
+  const seenCursors = new Set();
+  let page = 0;
+  const MAX_PAGES = 50;
+  const maxAttempts = 5;
+
+  while (true) {
+    page += 1;
+    const body = {
+      limit: 200,
+      filter: { field: "action", operator: "equals", value: "Issue Priority Changed" },
+    };
+    if (cursor) body.cursor = cursor;
+
+    let attempt = 0;
+    let json;
+    while (true) {
+      attempt += 1;
+      const res = await fetch(`${PYLON_API_BASE}/audit-logs/search`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${pylonToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 429) {
+        if (attempt >= maxAttempts) {
+          console.warn(`[PRIO-AUDIT] 429 after ${maxAttempts} attempts on page ${page}; skipping.`);
+          return prioChangeMap;
+        }
+        const retryAfterMs = res.headers.get("retry-after")
+          ? Number(res.headers.get("retry-after")) * 1000
+          : Math.min(30000, 750 * 2 ** (attempt - 1));
+        await sleep(retryAfterMs);
+        continue;
+      }
+      const text = await res.text();
+      try { json = JSON.parse(text); } catch {
+        console.warn(`[PRIO-AUDIT] Non-JSON (${res.status}) on page ${page}: ${text.slice(0, 200)}`);
+        return prioChangeMap;
+      }
+      if (!res.ok) {
+        console.warn(`[PRIO-AUDIT] /audit-logs/search failed (${res.status}) on page ${page}`);
+        return prioChangeMap;
+      }
+      break;
+    }
+
+    const events = Array.isArray(json?.data) ? json.data : [];
+    let inWindowCount = 0;
+    for (const event of events) {
+      const issueId = event?.object_id;
+      const happenedAt = event?.action_happened_at;
+      if (!issueId || !happenedAt) continue;
+      const eventDt = DateTime.fromISO(happenedAt, { zone: "utc" });
+      if (eventDt < cutoffDt) continue;
+      inWindowCount++;
+      // Keep the LATEST change — that's when the current priority was set.
+      if (!prioChangeMap.has(issueId) || happenedAt > prioChangeMap.get(issueId)) {
+        prioChangeMap.set(issueId, happenedAt);
+      }
+    }
+
+    const hasNext = json?.pagination?.has_next_page === true;
+    const nextCursor = json?.pagination?.cursor ?? null;
+    console.log(`[PRIO-AUDIT] page=${page} fetched=${events.length} in_window=${inWindowCount} found=${prioChangeMap.size}`);
+    if (!hasNext || !nextCursor) break;
+    if (events.length > 0 && inWindowCount === 0) {
+      console.log(`[PRIO-AUDIT] Full page out of window; stopping.`);
+      break;
+    }
+    if (seenCursors.has(nextCursor)) { console.warn(`[PRIO-AUDIT] cursor repeated; stopping.`); break; }
+    seenCursors.add(nextCursor);
+    if (page >= MAX_PAGES) { console.warn(`[PRIO-AUDIT] hit MAX_PAGES; stopping.`); break; }
+    cursor = nextCursor;
+    await sleep(200);
+  }
+
+  console.log(`[PRIO-AUDIT] Done. ${prioChangeMap.size} priority change timestamps loaded.`);
+  return prioChangeMap;
+}
+
+/**
+ * Determine the SLA clock start for an issue.
+ * Priority change resets the clock (applies to all tiers).
+ * Falls back to conversion time (enterprise), then created_at.
+ */
+function slaClockStart(issueId, createdAt, conversionTimes, priorityChangeTimes) {
+  const prioChange = priorityChangeTimes?.get(issueId);
+  const conversion = conversionTimes?.get(issueId);
+  return [prioChange, conversion, createdAt].filter(Boolean).reduce((latest, t) => t > latest ? t : latest);
+}
+
+/**
  * Fetch all users:
  * - Build id -> name map (used for display)
  * - Build name -> id map (used for roster matching)
@@ -1353,7 +1457,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
  *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }) {
   const nowPt = ptNow();
 
   const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
@@ -1419,7 +1523,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
         const p0p1Coverage = SLA_COVERAGE[tier]?.[p0p1PrioIdx] ?? "biz";
         let p0p1TimeRemaining = null;
         if (p0p1SlaSeconds !== null && issue.created_at) {
-          const p0p1Elapsed = elapsedSeconds(issue.created_at, nowPt, p0p1Coverage);
+          const p0p1Elapsed = elapsedSeconds(slaClockStart(issue.id, issue.created_at, conversionTimes, priorityChangeTimes), nowPt, p0p1Coverage);
           p0p1TimeRemaining = p0p1SlaSeconds - p0p1Elapsed;
         }
         // Only add to Pending if not yet breached — overdue issues move to FR SLA Breached.
@@ -1445,7 +1549,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
         const p2p3Coverage = SLA_COVERAGE[tier]?.[p2p3PrioIdx] ?? "biz";
         let p2p3Overdue = false;
         if (p2p3SlaSeconds !== null && issue.created_at) {
-          const p2p3Elapsed = elapsedSeconds(issue.created_at, nowPt, p2p3Coverage);
+          const p2p3Elapsed = elapsedSeconds(slaClockStart(issue.id, issue.created_at, conversionTimes, priorityChangeTimes), nowPt, p2p3Coverage);
           p2p3Overdue = p2p3Elapsed > p2p3SlaSeconds;
         }
         if (!p2p3Overdue) {
@@ -1460,9 +1564,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
         const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
         if (slaSeconds !== null) {
           const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
-          const slaStartIso = isEnterpriseTier(tier)
-            ? (conversionTimes?.get(issue.id) ?? issue.created_at)
-            : issue.created_at;
+          const slaStartIso = slaClockStart(issue.id, issue.created_at, conversionTimes, priorityChangeTimes);
           const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
           if (elapsed > slaSeconds && !slaBreachedDetails.has(issue.id)) {
             ids.slaBreached.add(issue.id);
@@ -1486,7 +1588,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
         const prioIdx = PRIORITY_IDX[prioRaw] ?? null;
         const slaSeconds = prioIdx !== null ? (SLA_SECONDS[tier]?.[prioIdx] ?? null) : null;
         const coverage = SLA_COVERAGE[tier]?.[prioIdx] ?? "biz";
-        const slaStartIso = conversionTimes?.get(issue.id) ?? issue.created_at;
+        const slaStartIso = slaClockStart(issue.id, issue.created_at, conversionTimes, priorityChangeTimes);
         let timeRemaining = null;
         if (slaSeconds !== null && slaStartIso) {
           const elapsed = elapsedSeconds(slaStartIso, nowPt, coverage);
@@ -1972,9 +2074,10 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const [created, conversionTimes] = await Promise.all([
+  const [created, conversionTimes, priorityChangeTimes] = await Promise.all([
     scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
+    fetchPriorityChangeTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
 
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
@@ -1993,7 +2096,7 @@ async function main() {
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, allRosterIds }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }),
     scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }),
     scanHandoffIssues({ pylonToken, allRosterIds }),
   ]);
