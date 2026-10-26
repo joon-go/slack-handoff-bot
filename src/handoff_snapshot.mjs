@@ -846,6 +846,7 @@ async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
   let page = 0;
   const MAX_PAGES = 50;
   const maxAttempts = 5;
+  let truncated = false;
 
   while (true) {
     page += 1;
@@ -871,7 +872,7 @@ async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
       if (res.status === 429) {
         if (attempt >= maxAttempts) {
           console.warn(`[PRIO-AUDIT] 429 after ${maxAttempts} attempts on page ${page}; skipping.`);
-          return prioChangeMap;
+          return { map: prioChangeMap, truncated: true };
         }
         const retryAfterMs = res.headers.get("retry-after")
           ? Number(res.headers.get("retry-after")) * 1000
@@ -882,11 +883,11 @@ async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
       const text = await res.text();
       try { json = JSON.parse(text); } catch {
         console.warn(`[PRIO-AUDIT] Non-JSON (${res.status}) on page ${page}: ${text.slice(0, 200)}`);
-        return prioChangeMap;
+        return { map: prioChangeMap, truncated: true };
       }
       if (!res.ok) {
         console.warn(`[PRIO-AUDIT] /audit-logs/search failed (${res.status}) on page ${page}`);
-        return prioChangeMap;
+        return { map: prioChangeMap, truncated: true };
       }
       break;
     }
@@ -910,19 +911,19 @@ async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
     const nextCursor = json?.pagination?.cursor ?? null;
     console.log(`[PRIO-AUDIT] page=${page} fetched=${events.length} in_window=${inWindowCount} found=${prioChangeMap.size}`);
     if (!hasNext || !nextCursor) break;
-    if (events.length > 0 && inWindowCount === 0) {
-      console.log(`[PRIO-AUDIT] Full page out of window; stopping.`);
-      break;
-    }
     if (seenCursors.has(nextCursor)) { console.warn(`[PRIO-AUDIT] cursor repeated; stopping.`); break; }
     seenCursors.add(nextCursor);
-    if (page >= MAX_PAGES) { console.warn(`[PRIO-AUDIT] hit MAX_PAGES; stopping.`); break; }
+    if (page >= MAX_PAGES) {
+      console.warn(`[PRIO-AUDIT] hit MAX_PAGES=${MAX_PAGES}; results may be incomplete.`);
+      truncated = true;
+      break;
+    }
     cursor = nextCursor;
     await sleep(200);
   }
 
   console.log(`[PRIO-AUDIT] Done. ${prioChangeMap.size} priority change timestamps loaded.`);
-  return prioChangeMap;
+  return { map: prioChangeMap, truncated };
 }
 
 /**
@@ -933,7 +934,11 @@ async function fetchPriorityChangeTimes({ pylonToken, lookbackDays }) {
 function slaClockStart(issueId, createdAt, conversionTimes, priorityChangeTimes) {
   const prioChange = priorityChangeTimes?.get(issueId);
   const conversion = conversionTimes?.get(issueId);
-  return [prioChange, conversion, createdAt].filter(Boolean).reduce((latest, t) => t > latest ? t : latest);
+  const candidates = [prioChange, conversion, createdAt].filter(Boolean);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((latest, t) =>
+    DateTime.fromISO(t, { zone: "utc" }) > DateTime.fromISO(latest, { zone: "utc" }) ? t : latest
+  );
 }
 
 /**
@@ -2074,11 +2079,12 @@ async function main() {
   // Enterprise issues that started as conversations have created_at = conversation start,
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
-  const [created, conversionTimes, priorityChangeTimes] = await Promise.all([
+  const [created, conversionTimes, prioAuditResult] = await Promise.all([
     scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
     fetchPriorityChangeTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
+  const priorityChangeTimes = prioAuditResult.map;
 
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
@@ -2180,6 +2186,9 @@ async function main() {
   }
   if (handoff.truncated) {
     truncationWarnings.push("SCAN-D (handoff issues) truncated");
+  }
+  if (prioAuditResult.truncated) {
+    truncationWarnings.push("PRIO-AUDIT (priority change timestamps) truncated");
   }
 
   const slackText = buildSlackHandoffMessage({
