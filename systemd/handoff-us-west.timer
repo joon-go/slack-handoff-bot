@@ -1,5 +1,5 @@
 [Unit]
-Description=Run US snapshot daily
+Description=Run US West snapshot daily
 
 [Timer]
 OnCalendar=*-*-* 18:00:00
