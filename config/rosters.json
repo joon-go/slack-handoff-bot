@@ -1,14 +1,21 @@
 {
-  "emea": ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
-  "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Stacie", "Syed Haque", "Mohan Kumar C S"],
-  "us": ["Tassia Shibuya", "Fariha", "Tim", "David Chau"],
+  "emea":           ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
+  "apac_india":     ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"],
+  "apac_australia": ["Stacie", "Syed Haque"],
+  "us_west":        ["Tassia Shibuya", "Fariha", "Tim"],
+  "us_east":        ["David Chau", "Abhishek Jani"],
   "shift_lead_roster": {
-    "us":   ["Tassia Shibuya", "Fariha", "Tim"],
-    "apac": ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"]
+    "us_west":        ["Tassia Shibuya", "Fariha", "Tim"],
+    "us_east":        ["David Chau", "Abhishek Jani"],
+    "apac_india":     ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"],
+    "apac_australia": ["Stacie", "Syed Haque"],
+    "emea":           ["Tommy Lundy", "Dylan Bonar", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"]
   },
   "shift_lead_anchor": {
-    "us":   { "name": "Tassia Shibuya",   "year": 2026, "month": 5 },
-    "emea": { "name": "Tommy Lundy",      "year": 2026, "month": 5 },
-    "apac": { "name": "Chinmay Koratkar", "year": 2026, "month": 5 }
+    "us_west":        { "name": "Tassia Shibuya",   "year": 2026, "month": 5 },
+    "us_east":        { "name": "David Chau",        "year": 2026, "month": 5 },
+    "apac_india":     { "name": "Chinmay Koratkar",  "year": 2026, "month": 5 },
+    "apac_australia": { "name": "Stacie",            "year": 2026, "month": 5 },
+    "emea":           { "name": "Tommy Lundy",       "year": 2026, "month": 5 }
   }
 }
