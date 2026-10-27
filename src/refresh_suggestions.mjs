@@ -27,9 +27,11 @@ const TZ_WINDOWS = [
 
 // Which timezone windows belong to each roster region
 const REGION_WINDOWS = {
-  apac: ["APAC Australia", "APAC India"],
-  emea: ["EMEA UK"],
-  us:   ["US East", "US West"],
+  apac_australia: ["APAC Australia"],
+  apac_india:     ["APAC India"],
+  emea:           ["EMEA UK"],
+  us_east:        ["US East"],
+  us_west:        ["US West"],
 };
 
 const OPEN_STATES = ["new", "waiting_on_customer", "waiting_on_you", "on_hold"];
@@ -200,9 +202,9 @@ async function main() {
 
   const nameToId = Object.fromEntries(Object.entries(idToName).map(([id, name]) => [name, id]));
 
-  // Build assigneeId → roster region map across all three slots
+  // Build assigneeId → roster region map across all five sub-regions
   const assigneeToRegion = {};
-  for (const region of ["apac", "emea", "us"]) {
+  for (const region of ["apac_india", "apac_australia", "emea", "us_west", "us_east"]) {
     for (const name of rosters[region] || []) {
       const id = nameToId[name];
       if (id) assigneeToRegion[id] = region;
@@ -210,7 +212,7 @@ async function main() {
     }
   }
   const rosterIds = new Set(Object.keys(assigneeToRegion));
-  console.log(`[ROSTER] ${rosterIds.size} members across apac/emea/us`);
+  console.log(`[ROSTER] ${rosterIds.size} members across 5 sub-regions`);
 
   // Collect all open enterprise tickets assigned to roster members
   const tickets = new Map();

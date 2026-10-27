@@ -170,6 +170,21 @@ function loadRosters() {
 
 const REGION_ROSTERS = loadRosters();
 
+// Maps each 3-way handoff slot to its constituent sub-regions.
+const SLOT_SUB_REGIONS = {
+  apac: ["apac_india", "apac_australia"],
+  emea: ["emea"],
+  us:   ["us_west", "us_east"],
+};
+
+const SUB_REGION_LABELS = {
+  apac_india:     "APAC India",
+  apac_australia: "APAC Australia",
+  emea:           "EMEA",
+  us_west:        "US West",
+  us_east:        "US East",
+};
+
 function loadHandoffSuggestions() {
   try {
     const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2010,25 +2025,26 @@ async function main() {
 
   // Resolve roster display names to IDs once — used by all four scans.
   // ID-based matching is rename-proof; names in rosters.json are the source of truth.
-  const allRosterNames = [...(REGION_ROSTERS.apac || []), ...(REGION_ROSTERS.emea || []), ...(REGION_ROSTERS.us || [])];
+  const allSubRegions = ["apac_india", "apac_australia", "emea", "us_west", "us_east"];
+  const allRosterNames = allSubRegions.flatMap(r => REGION_ROSTERS[r] || []);
   const allRosterIds = new Set(
     allRosterNames
       .map(name => assigneeNameToId[name])
       .filter(Boolean)
   );
 
-  // Slot-specific roster IDs — used elsewhere; kept for reference.
+  // Slot-specific roster IDs — all engineers across this slot's sub-regions.
+  const slotSubRegions = SLOT_SUB_REGIONS[slot] || [];
   const slotRosterIds = new Set(
-    (REGION_ROSTERS[slot] || []).map(name => assigneeNameToId[name]).filter(Boolean)
+    slotSubRegions.flatMap(r => REGION_ROSTERS[r] || [])
+      .map(name => assigneeNameToId[name]).filter(Boolean)
   );
 
   // Map assigneeId → display region label for the "current → recommended" format.
-  const REGION_LABELS = { apac: "APAC", emea: "EMEA", us: "US" };
   const assigneeIdToRegion = {};
-  for (const [region, names] of Object.entries(REGION_ROSTERS)) {
-    if (!Array.isArray(names)) continue;
-    const label = REGION_LABELS[region] ?? region.toUpperCase();
-    for (const name of names) {
+  for (const region of allSubRegions) {
+    const label = SUB_REGION_LABELS[region] ?? region;
+    for (const name of REGION_ROSTERS[region] || []) {
       const id = assigneeNameToId[name];
       if (id) assigneeIdToRegion[id] = label;
     }
@@ -2089,15 +2105,23 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  const shiftLead = getShiftLead(slot, ptNow());
-
-  // Assigned breakdown — show all three regions so viewers get the full picture
+  // Assigned breakdown — show all five sub-regions so viewers get the full picture
   // at handoff time regardless of which shift is reporting.
-  const apacBreakdown = formatAssignedBreakdownForShift("apac", created.issues, assigneeIdToName);
-  const emeaBreakdown = formatAssignedBreakdownForShift("emea", created.issues, assigneeIdToName);
-  const usBreakdown   = formatAssignedBreakdownForShift("us",   created.issues, assigneeIdToName);
-  const allRegionsBreakdown =
-    `[APAC] ${apacBreakdown.pylon}\n[EMEA] ${emeaBreakdown.pylon}\n[AMERICA] ${usBreakdown.pylon}`;
+  const subRegionBreakdowns = {};
+  for (const r of allSubRegions) {
+    subRegionBreakdowns[r] = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
+  }
+  const allRegionsBreakdown = [
+    `[APAC India]     ${subRegionBreakdowns.apac_india.pylon}`,
+    `[APAC Australia] ${subRegionBreakdowns.apac_australia.pylon}`,
+    `[EMEA]           ${subRegionBreakdowns.emea.pylon}`,
+    `[US West]        ${subRegionBreakdowns.us_west.pylon}`,
+    `[US East]        ${subRegionBreakdowns.us_east.pylon}`,
+  ].join("\n");
+
+  const shiftLead = slotSubRegions.length === 1
+    ? getShiftLead(slotSubRegions[0], ptNow())
+    : slotSubRegions.map(r => `${SUB_REGION_LABELS[r]}: ${getShiftLead(r, ptNow())}`).join(" | ");
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
@@ -2225,9 +2249,11 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assignedApac: apacBreakdown.pylon,
-    assignedEmea: emeaBreakdown.pylon,
-    assignedUs: usBreakdown.pylon,
+    assignedApacIndia:     subRegionBreakdowns.apac_india.pylon,
+    assignedApacAustralia: subRegionBreakdowns.apac_australia.pylon,
+    assignedEmea:          subRegionBreakdowns.emea.pylon,
+    assignedUsWest:        subRegionBreakdowns.us_west.pylon,
+    assignedUsEast:        subRegionBreakdowns.us_east.pylon,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,

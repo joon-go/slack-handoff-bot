@@ -23,8 +23,14 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PD_API_BASE = "https://api.pagerduty.com";
 
-const REGION_DISPLAY = { us: "Americas", apac: "APAC", emea: "EMEA" };
-const REGION_ORDER   = ["EMEA", "Americas", "APAC"];
+const REGION_DISPLAY = {
+  emea:           "EMEA",
+  us_east:        "US East",
+  us_west:        "US West",
+  apac_india:     "APAC India",
+  apac_australia: "APAC Australia",
+};
+const REGION_ORDER = ["EMEA", "US East", "US West", "APAC India", "APAC Australia"];
 
 function loadRosters() {
   const path = resolve(__dirname, "..", "config", "rosters.json");
@@ -36,7 +42,7 @@ function loadRosters() {
 // the PD name starts with the same tokens; "Rob" does NOT match "Robert Norrie".
 function matchRosterRegion(pdName, rosters) {
   const pdTokens = pdName.toLowerCase().split(/\s+/);
-  for (const region of ["us", "apac", "emea"]) {
+  for (const region of ["emea", "us_west", "us_east", "apac_india", "apac_australia"]) {
     for (const name of rosters[region] ?? []) {
       const rosterTokens = name.toLowerCase().split(/\s+/);
       // Compare up to the shorter name's token count so "Mohan Kumar" matches
@@ -200,7 +206,7 @@ async function main() {
       continue;
     }
 
-    const displayRegion = REGION_DISPLAY[region] ?? region;
+    const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
     regionMap[displayRegion] = engineer;
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
