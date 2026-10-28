@@ -3,12 +3,14 @@
  *
  * Cron (Pacific Time):
  *   CRON_TZ=America/Los_Angeles
- *   0 3  * * * node /app/handoff_snapshot.mjs apac
+ *   0  6 * * * node /app/handoff_snapshot.mjs apac_india
+ *   0 23 * * * node /app/handoff_snapshot.mjs apac_australia
  *   0 10 * * * node /app/handoff_snapshot.mjs emea
- *   0 18 * * * node /app/handoff_snapshot.mjs us
+ *   0 15 * * * node /app/handoff_snapshot.mjs us_east
+ *   0 18 * * * node /app/handoff_snapshot.mjs us_west
  *
  * Usage:
- *   node handoff_snapshot.mjs apac|emea|us
+ *   node handoff_snapshot.mjs apac_india|apac_australia|emea|us_east|us_west
  *
  * Env:
  *   PYLON_TOKEN
@@ -107,8 +109,8 @@ const SLA_COVERAGE = {
   lite:               ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
   pro_plus:           ["biz",      "biz",      "biz",      "biz"     ], // legacy Pro model
-  enterprise:         ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
-  enterprise_elite:   ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
+  enterprise:         ["calendar", "weekday",  "calendar", "calendar"], // P0 24x7; P1 M-F; P2/P3 48 cal hrs
+  enterprise_elite:   ["calendar", "weekday",  "calendar", "calendar"], // P0 24x7; P1 M-F; P2/P3 48 cal hrs
   community:          ["biz",      "biz",      "biz",      "biz"     ],
   unknown:            ["biz",      "biz",      "biz",      "biz"     ],
 };
@@ -118,17 +120,21 @@ const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
 
 // Header labels (handoff-to sequence)
 const SLOT_CONFIG = {
-  apac: { headerLabel: "APAC to EMEA" },
-  emea: { headerLabel: "EMEA to US" },
-  us: { headerLabel: "US to APAC" },
+  apac_india:     { headerLabel: "APAC India to EMEA" },
+  apac_australia: { headerLabel: "APAC Australia to APAC India" },
+  emea:           { headerLabel: "EMEA to US" },
+  us_east:        { headerLabel: "US East to US West" },
+  us_west:        { headerLabel: "US West to APAC" },
 };
 
 // Shift rosters for assignment breakdown (names must match Pylon user names).
 // Loaded from config/rosters.json if available; falls back to hardcoded defaults.
 const DEFAULT_ROSTERS = {
-  emea: ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty"],
-  apac: ["Saurabh Lambe", "Chinmay Koratkar"],
-  us: ["Feran Morgan", "Tassia Shibuya", "Fariha Marzan", "Tim Perry"],
+  emea:           ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
+  apac_india:     ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"],
+  apac_australia: ["Stacie", "Syed Haque"],
+  us_west:        ["Tassia Shibuya", "Fariha", "Tim"],
+  us_east:        ["David Chau", "Abhishek Jani"],
 };
 
 function loadRosters() {
@@ -156,9 +162,11 @@ function loadRosters() {
     }
 
     return {
-      emea: Array.isArray(parsed.emea) ? parsed.emea : DEFAULT_ROSTERS.emea,
-      apac: Array.isArray(parsed.apac) ? parsed.apac : DEFAULT_ROSTERS.apac,
-      us: Array.isArray(parsed.us) ? parsed.us : DEFAULT_ROSTERS.us,
+      emea:           Array.isArray(parsed.emea)           ? parsed.emea           : DEFAULT_ROSTERS.emea,
+      apac_india:     Array.isArray(parsed.apac_india)     ? parsed.apac_india     : DEFAULT_ROSTERS.apac_india,
+      apac_australia: Array.isArray(parsed.apac_australia) ? parsed.apac_australia : DEFAULT_ROSTERS.apac_australia,
+      us_west:        Array.isArray(parsed.us_west)        ? parsed.us_west        : DEFAULT_ROSTERS.us_west,
+      us_east:        Array.isArray(parsed.us_east)        ? parsed.us_east        : DEFAULT_ROSTERS.us_east,
       shift_lead_roster: shiftLeadRoster,
       shift_lead_anchor: parsed.shift_lead_anchor ?? null,
     };
@@ -170,11 +178,13 @@ function loadRosters() {
 
 const REGION_ROSTERS = loadRosters();
 
-// Maps each 3-way handoff slot to its constituent sub-regions.
+// Maps each handoff slot to its constituent sub-regions (now 1:1).
 const SLOT_SUB_REGIONS = {
-  apac: ["apac_india", "apac_australia"],
-  emea: ["emea"],
-  us:   ["us_west", "us_east"],
+  apac_india:     ["apac_india"],
+  apac_australia: ["apac_australia"],
+  emea:           ["emea"],
+  us_east:        ["us_east"],
+  us_west:        ["us_west"],
 };
 
 const SUB_REGION_LABELS = {
@@ -398,47 +408,55 @@ function handoffLabelFromSlug(slug) {
 
 /**
  * Shift window (Pacific Time):
- *   US:   09:00 -> 18:00
- *   EMEA: 01:00 -> 10:00
- *   APAC: 18:00 -> 03:00 (cross-midnight)
+ *   us_west:        09:00 -> 18:00
+ *   us_east:        06:00 -> 15:00
+ *   emea:           01:00 -> 10:00
+ *   apac_australia: 15:00 -> 23:00
+ *   apac_india:     21:00 -> 06:00 (cross-midnight)
  */
 function getCreatedWindowForSlot(slot, nowPt) {
   const day = nowPt.startOf("day");
 
-  const t01 = day.set({ hour: 1 });
-  const t03 = day.set({ hour: 3 });
-  const t09 = day.set({ hour: 9 });
-  const t10 = day.set({ hour: 10 });
-  const t18 = day.set({ hour: 18 });
+  if (slot === "us_west") {
+    const startPt = day.set({ hour: 9 });
+    const endPt   = day.set({ hour: 18 });
+    return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
+  }
 
-  if (slot === "us") {
-    const startPt = t09;
-    const endPt = t18;
+  if (slot === "us_east") {
+    const startPt = day.set({ hour: 6 });
+    const endPt   = day.set({ hour: 15 });
     return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
   }
 
   if (slot === "emea") {
-    const startPt = t01;
-    const endPt = t10;
+    const startPt = day.set({ hour: 1 });
+    const endPt   = day.set({ hour: 10 });
     return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
   }
 
-  // apac: 18:00 prev day -> 03:00 today (cron at 3 AM)
-  // If running manually during the live APAC shift (hour >= 18), anchor forward instead:
-  //   live shift:      today 18:00 -> tomorrow 03:00
-  //   completed shift: yesterday 18:00 -> today 03:00
+  if (slot === "apac_australia") {
+    const startPt = day.set({ hour: 15 });
+    const endPt   = day.set({ hour: 23 });
+    return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
+  }
+
+  // apac_india: 21:00 prev day -> 06:00 today (cron at 6 AM)
+  // If running manually during the live shift (hour >= 21), anchor forward:
+  //   live shift:      today 21:00 -> tomorrow 06:00
+  //   completed shift: yesterday 21:00 -> today 06:00
   {
-    const inLiveShift = nowPt.hour >= 18;
-    const startPt = inLiveShift ? t18 : t18.minus({ days: 1 });
-    const endPt = inLiveShift ? t03.plus({ days: 1 }) : t03;
+    const t21 = day.set({ hour: 21 });
+    const t06 = day.set({ hour: 6 });
+    const inLiveShift = nowPt.hour >= 21;
+    const startPt = inLiveShift ? t21 : t21.minus({ days: 1 });
+    const endPt   = inLiveShift ? t06.plus({ days: 1 }) : t06;
     return { startPt, endPt, startUtc: startPt.toUTC(), endUtc: endPt.toUTC() };
   }
 }
 
 function regionLabelFromSlot(slot) {
-  if (slot === "us") return "US";
-  if (slot === "emea") return "EMEA";
-  return "APAC";
+  return SUB_REGION_LABELS[slot] ?? slot;
 }
 
 /** ----------------------------
@@ -1348,7 +1366,7 @@ ${newTicketsAssignedPylonBreakdown}`;
   }
 
   if (waitP2P3 > 0) {
-    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
+    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
     if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
   }
 
@@ -1801,7 +1819,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
  *
  * Update-frequency thresholds (best effort until per-tier values are defined):
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
- *   P2/P3 (medium/low):  customer last spoke > 3 days ago
+ *   P2/P3 (medium/low):  customer last spoke > 48 cal hrs ago
  */
 async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
   const nowPt = ptNow();
@@ -2007,7 +2025,7 @@ async function postToSlack({ slackToken, text }) {
 
 async function main() {
   const slot = process.argv[2];
-  if (!slot || !SLOT_CONFIG[slot]) throw new Error("Usage: node handoff_snapshot.mjs <apac|emea|us>");
+  if (!slot || !SLOT_CONFIG[slot]) throw new Error("Usage: node handoff_snapshot.mjs <apac_india|apac_australia|emea|us_east|us_west>");
 
   const pylonToken = requireEnv("PYLON_TOKEN");
   const slackToken = requireEnv("SLACK_BOT_TOKEN");
@@ -2051,11 +2069,14 @@ async function main() {
   }
 
   // TZ window labels for the region this slot hands OFF TO.
-  // us→APAC, apac→EMEA, emea→US so each summary surfaces issues to reassign to the incoming team.
+  // Each entry lists the customer TZ windows that should be flagged as suggestions
+  // (tickets to reassign to the team that takes over next).
   const SLOT_TZ_WINDOWS = {
-    us:   ["APAC Australia", "APAC India", "APAC"],
-    apac: ["EMEA UK"],
-    emea: ["US East", "US West"],
+    apac_india:     ["EMEA UK"],
+    apac_australia: ["APAC India"],
+    emea:           ["US East", "US West"],
+    us_east:        ["US West"],
+    us_west:        ["APAC Australia", "APAC India", "APAC"],
   };
   const slotTzWindows = SLOT_TZ_WINDOWS[slot] || [];
   // The audit stored 8-char UUID prefixes; Pylon returns full UUIDs. Normalize before filtering.
@@ -2096,7 +2117,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes, prioAuditResult] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
+    scanCreatedDuringShift({ slot, pylonToken, allRosterIds: slotRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
     fetchPriorityChangeTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
@@ -2105,30 +2126,24 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  // Assigned breakdown — show all five sub-regions so viewers get the full picture
-  // at handoff time regardless of which shift is reporting.
-  const subRegionBreakdowns = {};
-  for (const r of allSubRegions) {
-    subRegionBreakdowns[r] = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
-  }
-  const allRegionsBreakdown = [
-    `[APAC India]     ${subRegionBreakdowns.apac_india.pylon}`,
-    `[APAC Australia] ${subRegionBreakdowns.apac_australia.pylon}`,
-    `[EMEA]           ${subRegionBreakdowns.emea.pylon}`,
-    `[US West]        ${subRegionBreakdowns.us_west.pylon}`,
-    `[US East]        ${subRegionBreakdowns.us_east.pylon}`,
-  ].join("\n");
+  // Assigned breakdown — show only this sub-region's engineers.
+  const slotBreakdown = formatAssignedBreakdownForShift(slot, created.issues, assigneeIdToName);
+  const allRegionsBreakdown = slotBreakdown.pylon;
 
-  const shiftLead = slotSubRegions.length === 1
-    ? getShiftLead(slotSubRegions[0], ptNow())
-    : slotSubRegions.map(r => `${SUB_REGION_LABELS[r]}: ${getShiftLead(r, ptNow())}`).join(" | ");
+  // US and APAC posts show a paired lead — one from each sub-region, rotating together.
+  const shiftLead =
+    slot === "us_east" || slot === "us_west"
+      ? `${getShiftLead("us_east", ptNow())} | ${getShiftLead("us_west", ptNow())}`
+      : slot === "apac_india" || slot === "apac_australia"
+      ? `${getShiftLead("apac_india", ptNow())} | ${getShiftLead("apac_australia", ptNow())}`
+      : getShiftLead(slot, ptNow());
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }),
-    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }),
-    scanHandoffIssues({ pylonToken, allRosterIds }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds: slotRosterIds }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds: slotRosterIds }),
+    scanHandoffIssues({ pylonToken, allRosterIds: slotRosterIds }),
   ]);
 
   // Merge issueByNumber from all three scans; SCAN-B wins (has account names for enterprise).
@@ -2249,11 +2264,7 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assignedApacIndia:     subRegionBreakdowns.apac_india.pylon,
-    assignedApacAustralia: subRegionBreakdowns.apac_australia.pylon,
-    assignedEmea:          subRegionBreakdowns.emea.pylon,
-    assignedUsWest:        subRegionBreakdowns.us_west.pylon,
-    assignedUsEast:        subRegionBreakdowns.us_east.pylon,
+    assigned: slotBreakdown.pylon,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,

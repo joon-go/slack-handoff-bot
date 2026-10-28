@@ -1,0 +1,6 @@
+[Unit]
+Description=Handoff snapshot APAC Australia
+
+[Service]
+ExecStart=/usr/bin/node /opt/handoff/handoff_snapshot.mjs apac_australia
+EnvironmentFile=/home/joon/slack-handoff-bot/.env

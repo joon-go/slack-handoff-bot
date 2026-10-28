@@ -1,8 +1,8 @@
 [Unit]
-Description=Run APAC snapshot daily
+Description=Run US East snapshot daily
 
 [Timer]
-OnCalendar=*-*-* 03:00:00
+OnCalendar=*-*-* 15:00:00
 Timezone=America/Los_Angeles
 
 [Install]
