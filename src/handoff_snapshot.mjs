@@ -1737,7 +1737,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
  * Checks hand_off_region client-side.
  * No time-based lookback — finds any age handoff issue as long as it's open.
  */
-async function scanHandoffIssues({ pylonToken, allRosterIds }) {
+async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
   const handoffDisplay = new Map();
   const issueByNumber = new Map();
   let truncated = false;
@@ -1763,8 +1763,10 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
         const prioLabel = mapPriorityLabel(prioRaw);
         issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
+        // Only show handoff-tagged items for the current slot's engineers in the display block.
         const slug = getHandoffRegionValue(issue);
         if (!slug || !hasHandoffTag(issue)) continue;
+        if (!slotRosterIds.has(issue?.assignee?.id)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
@@ -2148,7 +2150,7 @@ async function main() {
   const [metrics, waiting, handoff] = await Promise.all([
     scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds: slotRosterIds }),
     scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds: slotRosterIds }),
-    scanHandoffIssues({ pylonToken, allRosterIds: slotRosterIds }),
+    scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }),
   ]);
 
   // Merge issueByNumber from all three scans; SCAN-B wins (has account names for enterprise).
