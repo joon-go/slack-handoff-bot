@@ -2146,7 +2146,7 @@ async function main() {
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds: slotRosterIds }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }),
     scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }),
     scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }),
   ]);
