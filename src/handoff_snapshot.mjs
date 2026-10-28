@@ -1292,7 +1292,7 @@ function buildSlackHandoffMessage({
   headerLabel,
   shiftLead,
   datePt,
-  newTicketsDuringShiftCount,
+  newTicketsByRegion,
   aiAgentCount,
   humanAgentCount,
   newTicketsAssignedPylonBreakdown,
@@ -1330,7 +1330,7 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount}
+*New tickets:* ${newTicketsByRegion}
 AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
 
   msg +=
@@ -2126,11 +2126,13 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  // Assigned breakdown — show all 5 sub-regions with region labels.
-  const allRegionsBreakdown = allSubRegions.map(r => {
+  // Assigned breakdown + per-region new-ticket counts, both derived from created.issues.
+  const regionBreakdowns = allSubRegions.map(r => {
     const bd = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
-    return `[${SUB_REGION_LABELS[r]}] ${bd.pylon}`;
-  }).join("\n");
+    return { label: SUB_REGION_LABELS[r], pylon: bd.pylon, count: bd.assignedCount };
+  });
+  const allRegionsBreakdown = regionBreakdowns.map(b => `[${b.label}] ${b.pylon}`).join("\n");
+  const newTicketsByRegion  = regionBreakdowns.map(b => `${b.label}: ${b.count}`).join(" | ");
 
   // US and APAC posts show a paired lead — one from each sub-region, rotating together.
   const shiftLead =
@@ -2237,7 +2239,7 @@ async function main() {
     headerLabel,
     shiftLead,
     datePt,
-    newTicketsDuringShiftCount,
+    newTicketsByRegion,
     aiAgentCount,
     humanAgentCount,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
