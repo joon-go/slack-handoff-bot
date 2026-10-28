@@ -2130,7 +2130,13 @@ async function main() {
   const slotBreakdown = formatAssignedBreakdownForShift(slot, created.issues, assigneeIdToName);
   const allRegionsBreakdown = `[${SUB_REGION_LABELS[slot]}] ${slotBreakdown.pylon}`;
 
-  const shiftLead = getShiftLead(slot, ptNow());
+  // US and APAC posts show a paired lead — one from each sub-region, rotating together.
+  const shiftLead =
+    slot === "us_east" || slot === "us_west"
+      ? `US East: ${getShiftLead("us_east", ptNow())} | US West: ${getShiftLead("us_west", ptNow())}`
+      : slot === "apac_india" || slot === "apac_australia"
+      ? `APAC India: ${getShiftLead("apac_india", ptNow())} | APAC Australia: ${getShiftLead("apac_australia", ptNow())}`
+      : getShiftLead(slot, ptNow());
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
