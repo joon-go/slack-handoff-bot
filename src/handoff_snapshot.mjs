@@ -2117,7 +2117,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes, prioAuditResult] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, allRosterIds: slotRosterIds }),
+    scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
     fetchPriorityChangeTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
@@ -2126,9 +2126,11 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  // Assigned breakdown — show only this sub-region's engineers.
-  const slotBreakdown = formatAssignedBreakdownForShift(slot, created.issues, assigneeIdToName);
-  const allRegionsBreakdown = slotBreakdown.pylon;
+  // Assigned breakdown — show all 5 sub-regions with region labels.
+  const allRegionsBreakdown = allSubRegions.map(r => {
+    const bd = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
+    return `[${SUB_REGION_LABELS[r]}] ${bd.pylon}`;
+  }).join("\n");
 
   // US and APAC posts show a paired lead — one from each sub-region, rotating together.
   const shiftLead =
@@ -2264,7 +2266,7 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assigned: slotBreakdown.pylon,
+    assigned: allRegionsBreakdown,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
