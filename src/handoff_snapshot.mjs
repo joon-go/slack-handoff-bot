@@ -61,8 +61,9 @@ const PYLON_API_BASE = "https://api.usepylon.com";
 // Slack channel: override via env for prod; defaults to test channel for safety
 const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 
-// Team "L1+L2" (enforced locally)
-const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
+// Teams included in all scans
+const TEAM_ID_L1_L2      = "0363526b-d360-424a-9306-869bf7c2be4f";
+const TEAM_ID_BILLING    = "a3bd2f45-2600-4ef7-8fa7-2414aee2cfdc";
 
 // Bot user excluded from new-ticket counts
 const AI_SUPPORT_AGENT_ID = "22f64934-056c-4353-83cd-9c3cad8cfa3b";
@@ -349,7 +350,8 @@ function priorityRank(pLabel) {
 }
 
 function isTeamL1L2(issue) {
-  return issue?.team?.id === TEAM_ID_L1_L2;
+  const tid = issue?.team?.id;
+  return tid === TEAM_ID_L1_L2 || tid === TEAM_ID_BILLING;
 }
 
 function isOpenState(issue) {
