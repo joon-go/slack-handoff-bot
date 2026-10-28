@@ -2143,13 +2143,16 @@ async function main() {
   const slotRegionIdx        = allSubRegions.indexOf(slot);
   const slotTicketCount      = slotRegionIdx >= 0 ? regionBreakdowns[slotRegionIdx].count : 0;
 
-  // US and APAC posts show a paired lead — one from each sub-region, rotating together.
-  const shiftLead =
-    slot === "us_east" || slot === "us_west"
-      ? `${getShiftLead("us_east", ptNow())} | ${getShiftLead("us_west", ptNow())}`
-      : slot === "apac_india" || slot === "apac_australia"
-      ? `${getShiftLead("apac_india", ptNow())} | ${getShiftLead("apac_australia", ptNow())}`
-      : getShiftLead(slot, ptNow());
+  // Shift lead = outgoing region lead | incoming region lead (mirrors handoff direction).
+  const SLOT_LEAD_PAIRS = {
+    apac_australia: ["apac_australia", "apac_india"],
+    apac_india:     ["apac_india",     "emea"],
+    emea:           ["emea",           "us_east"],
+    us_east:        ["us_east",        "us_west"],
+    us_west:        ["us_west",        "apac_australia"],
+  };
+  const leadPair = SLOT_LEAD_PAIRS[slot] ?? [slot];
+  const shiftLead = leadPair.map(r => getShiftLead(r, ptNow())).join(" | ");
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
