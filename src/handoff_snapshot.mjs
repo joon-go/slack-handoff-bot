@@ -1482,7 +1482,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
  *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds, slotRosterIds }) {
   const nowPt = ptNow();
 
   const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
@@ -1514,15 +1514,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
     for (const issue of data) {
       if (!issue?.id) continue;
       const assigneeId = issue?.assignee?.id;
-      if (assigneeId !== AI_SUPPORT_AGENT_ID && !allRosterIds.has(assigneeId)) continue;
+      const isAi = assigneeId === AI_SUPPORT_AGENT_ID;
+      if (!isAi && (!allRosterIds.has(assigneeId) || !isTeamL1L2(issue))) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      // Last-internal-comment check is deferred to the post-merge batch.
+      // Collect handoff candidates: slot roster only so handoff items match the posting slot.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && slotRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1534,7 +1534,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       }
 
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
-      if (assigneeId === AI_SUPPORT_AGENT_ID) {
+      if (isAi) {
         aiAgentOpenCount++;
         continue;
       }
@@ -2148,7 +2148,7 @@ async function main() {
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds, slotRosterIds }),
     scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }),
     scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }),
   ]);
