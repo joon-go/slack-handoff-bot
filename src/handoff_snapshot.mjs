@@ -61,8 +61,9 @@ const PYLON_API_BASE = "https://api.usepylon.com";
 // Slack channel: override via env for prod; defaults to test channel for safety
 const SLACK_CHANNEL = process.env.SLACK_CHANNEL || "#support-automation-test";
 
-// Team "L1+L2" (enforced locally)
-const TEAM_ID_L1_L2 = "0363526b-d360-424a-9306-869bf7c2be4f";
+// Teams included in all scans
+const TEAM_ID_L1_L2      = "0363526b-d360-424a-9306-869bf7c2be4f";
+const TEAM_ID_BILLING    = "a3bd2f45-2600-4ef7-8fa7-2414aee2cfdc";
 
 // Bot user excluded from new-ticket counts
 const AI_SUPPORT_AGENT_ID = "22f64934-056c-4353-83cd-9c3cad8cfa3b";
@@ -122,7 +123,7 @@ const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
 const SLOT_CONFIG = {
   apac_india:     { headerLabel: "APAC India to EMEA" },
   apac_australia: { headerLabel: "APAC Australia to APAC India" },
-  emea:           { headerLabel: "EMEA to US" },
+  emea:           { headerLabel: "EMEA to US East" },
   us_east:        { headerLabel: "US East to US West" },
   us_west:        { headerLabel: "US West to APAC" },
 };
@@ -349,7 +350,8 @@ function priorityRank(pLabel) {
 }
 
 function isTeamL1L2(issue) {
-  return issue?.team?.id === TEAM_ID_L1_L2;
+  const tid = issue?.team?.id;
+  return tid === TEAM_ID_L1_L2 || tid === TEAM_ID_BILLING;
 }
 
 function isOpenState(issue) {
@@ -1337,43 +1339,28 @@ AI agents: ${aiAgentCount} | ${region} agents: ${slotTicketCount}`;
 `\n*Human Agents:*
 ${newTicketsAssignedPylonBreakdown}`;
 
-  if (entFrPending > 0) {
-    msg += `\n🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
-    if (entFrPendingLines) msg += `\n${entFrPendingLines}`;
-  }
+  msg += `\n🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
+  if (entFrPendingLines) msg += `\n${entFrPendingLines}`;
 
-  if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}\n${handoffSuggestionLines}`;
-  }
+  msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}`;
+  if (handoffSuggestionLines) msg += `\n${handoffSuggestionLines}`;
 
-  if (frP0P1 > 0) {
-    msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
-    if (p0p1IssueLines) msg += `\n${p0p1IssueLines}`;
-  }
+  msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
+  if (p0p1IssueLines) msg += `\n${p0p1IssueLines}`;
 
-  if (frP2P3 > 0) {
-    msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
-  }
+  msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
-  if (slaBreached > 0) {
-    msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
-    if (slaBreachedLines) msg += `\n${slaBreachedLines}`;
-  }
+  msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
+  if (slaBreachedLines) msg += `\n${slaBreachedLines}`;
 
-  if (waitP0P1 > 0) {
-    msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
-    if (waitP0P1Lines) msg += `\n${waitP0P1Lines}`;
-  }
+  msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
+  if (waitP0P1Lines) msg += `\n${waitP0P1Lines}`;
 
-  if (waitP2P3 > 0) {
-    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
-    if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
-  }
+  msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
+  if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
 
-  if (handoffIssues > 0) {
-    msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
-    if (handoffIssueLines) msg += `\n${handoffIssueLines}`;
-  }
+  msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
+  if (handoffIssueLines) msg += `\n${handoffIssueLines}`;
 
   if (truncationWarnings && truncationWarnings.length > 0) {
     msg += `\n\n⚠️ *Warning: Results truncated at MAX_PAGES limit*`;
@@ -1495,7 +1482,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
  * conversionTimes: Map<issueId, actionHappenedAtIso> from fetchTicketConversionTimes().
  *   For enterprise issues converted from conversations, SLA clock starts at conversion time.
  */
-async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds }) {
+async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds, slotRosterIds }) {
   const nowPt = ptNow();
 
   const NEW_STATE_FILTER = { field: "state", operator: "equals", value: "new" };
@@ -1527,15 +1514,15 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
     for (const issue of data) {
       if (!issue?.id) continue;
       const assigneeId = issue?.assignee?.id;
-      if (assigneeId !== AI_SUPPORT_AGENT_ID && !allRosterIds.has(assigneeId)) continue;
+      const isAi = assigneeId === AI_SUPPORT_AGENT_ID;
+      if (!isAi && (!allRosterIds.has(assigneeId) || !isTeamL1L2(issue))) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      // Last-internal-comment check is deferred to the post-merge batch.
+      // Collect handoff candidates: slot roster only so handoff items match the posting slot.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && slotRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1547,7 +1534,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       }
 
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
-      if (assigneeId === AI_SUPPORT_AGENT_ID) {
+      if (isAi) {
         aiAgentOpenCount++;
         continue;
       }
@@ -1737,7 +1724,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
  * Checks hand_off_region client-side.
  * No time-based lookback — finds any age handoff issue as long as it's open.
  */
-async function scanHandoffIssues({ pylonToken, allRosterIds }) {
+async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
   const handoffDisplay = new Map();
   const issueByNumber = new Map();
   let truncated = false;
@@ -1763,8 +1750,10 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
         const prioLabel = mapPriorityLabel(prioRaw);
         issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
+        // Only show handoff-tagged items for the current slot's engineers in the display block.
         const slug = getHandoffRegionValue(issue);
         if (!slug || !hasHandoffTag(issue)) continue;
+        if (!slotRosterIds.has(issue?.assignee?.id)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
@@ -1821,7 +1810,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
  *   P2/P3 (medium/low):  customer last spoke > 48 cal hrs ago
  */
-async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
+async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }) {
   const nowPt = ptNow();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
@@ -1829,6 +1818,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
   const handoffItems = new Map();        // waiting_on_you issues with hand_off_region set
   const waitP0P1Candidates = new Map();
   const waitP2P3Candidates = new Map();
+  const suggestionCandidates = new Map(); // all-roster waiting_on_you issues for suggestion validation
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1844,22 +1834,25 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!allRosterIds.has(issue?.assignee?.id)) continue;
+      const assigneeId = issue?.assignee?.id;
+      if (!allRosterIds.has(assigneeId)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
       // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
-        handoffItems.set(issue.id, {
-          id: issue.id,
-          number: issue.number,
-          priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
-          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
-          meetingRequired: isMeetingRequired(issue),
-        });
+      if (slotRosterIds.has(assigneeId)) {
+        const handoffSlug = getHandoffRegionValue(issue);
+        if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+          handoffItems.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: assigneeId ?? null,
+            handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+            meetingRequired: isMeetingRequired(issue),
+          });
+        }
       }
 
       const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
@@ -1869,16 +1862,22 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
         priorityLabel: prioLabel,
         prioRaw,
         tier: tierRaw.replace(/-/g, "_"),
-        assigneeId: issue?.assignee?.id ?? null,
+        assigneeId: assigneeId ?? null,
         accountId: issue?.account?.id ?? null,
         subject: issue?.title ?? "(No subject)",
       };
 
-      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
-        waitP0P1Candidates.set(issue.id, candidate);
-      }
-      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
-        waitP2P3Candidates.set(issue.id, candidate);
+      // Record for suggestion validation (all roster engineers, not just slot).
+      if (!suggestionCandidates.has(issue.id)) suggestionCandidates.set(issue.id, candidate);
+
+      // Wait metrics only for the current slot's engineers.
+      if (slotRosterIds.has(assigneeId)) {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+          waitP0P1Candidates.set(issue.id, candidate);
+        }
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+          waitP2P3Candidates.set(issue.id, candidate);
+        }
       }
     }
 
@@ -1982,8 +1981,8 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       : "";
 
   const issueByNumber = new Map();
-  for (const c of allWaitCandidates.values())
-    issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
+  for (const c of suggestionCandidates.values())
+    issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null, state: "waiting_on_you" });
 
   return {
     waitP0P1: ids.waitP0P1.size,
@@ -2135,20 +2134,23 @@ async function main() {
   const slotRegionIdx        = allSubRegions.indexOf(slot);
   const slotTicketCount      = slotRegionIdx >= 0 ? regionBreakdowns[slotRegionIdx].count : 0;
 
-  // US and APAC posts show a paired lead — one from each sub-region, rotating together.
-  const shiftLead =
-    slot === "us_east" || slot === "us_west"
-      ? `${getShiftLead("us_east", ptNow())} | ${getShiftLead("us_west", ptNow())}`
-      : slot === "apac_india" || slot === "apac_australia"
-      ? `${getShiftLead("apac_india", ptNow())} | ${getShiftLead("apac_australia", ptNow())}`
-      : getShiftLead(slot, ptNow());
+  // Shift lead = outgoing region lead | incoming region lead (mirrors handoff direction).
+  const SLOT_LEAD_PAIRS = {
+    apac_australia: ["apac_australia", "apac_india"],
+    apac_india:     ["apac_india",     "emea"],
+    emea:           ["emea",           "us_east"],
+    us_east:        ["us_east",        "us_west"],
+    us_west:        ["us_west",        "apac_australia"],
+  };
+  const leadPair = SLOT_LEAD_PAIRS[slot] ?? [slot];
+  const shiftLead = leadPair.map(r => getShiftLead(r, ptNow())).join(" | ");
 
   // Pass B (state=new SLA metrics), Pass C (state=waiting_on_you), and
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
-    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds: slotRosterIds }),
-    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds: slotRosterIds }),
-    scanHandoffIssues({ pylonToken, allRosterIds: slotRosterIds }),
+    scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds, slotRosterIds }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }),
+    scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }),
   ]);
 
   // Merge issueByNumber from all three scans; SCAN-B wins (has account names for enterprise).
@@ -2171,12 +2173,11 @@ async function main() {
     info.accountName = acctCache.get(info.accountId) ?? null;
   }
 
-  // Enrich and filter suggestions from scan data.
-  // Drop suggestions where the issue is closed/unknown-state or has been reassigned.
+  // Enrich and filter suggestions: only show waiting_on_you issues (Waiting on Support).
   const enrichedSuggestions = slotSuggestions
     .filter(s => {
       const info = issueByNumber.get(s.issueNumber);
-      return info !== undefined && info.assigneeId === s.assigneeId;
+      return info !== undefined && info.assigneeId === s.assigneeId && info.state === "waiting_on_you";
     })
     .map(s => {
       const info = issueByNumber.get(s.issueNumber);

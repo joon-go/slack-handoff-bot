@@ -3,7 +3,6 @@ Description=Run APAC Australia snapshot daily
 
 [Timer]
 OnCalendar=*-*-* 23:00:00
-Timezone=America/Los_Angeles
 
 [Install]
 WantedBy=timers.target
