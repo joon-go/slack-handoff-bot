@@ -122,7 +122,7 @@ const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
 const SLOT_CONFIG = {
   apac_india:     { headerLabel: "APAC India to EMEA" },
   apac_australia: { headerLabel: "APAC Australia to APAC India" },
-  emea:           { headerLabel: "EMEA to US" },
+  emea:           { headerLabel: "EMEA to US East" },
   us_east:        { headerLabel: "US East to US West" },
   us_west:        { headerLabel: "US West to APAC" },
 };

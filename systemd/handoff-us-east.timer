@@ -3,7 +3,6 @@ Description=Run US East snapshot daily
 
 [Timer]
 OnCalendar=*-*-* 15:00:00
-Timezone=America/Los_Angeles
 
 [Install]
 WantedBy=timers.target
