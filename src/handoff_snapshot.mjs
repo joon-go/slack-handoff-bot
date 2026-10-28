@@ -1292,7 +1292,7 @@ function buildSlackHandoffMessage({
   headerLabel,
   shiftLead,
   datePt,
-  newTicketsDuringShiftCount,
+  slotTicketCount,
   aiAgentCount,
   humanAgentCount,
   newTicketsAssignedPylonBreakdown,
@@ -1330,8 +1330,8 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets during ${region}:* ${newTicketsDuringShiftCount}
-AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
+*New tickets assigned:* ${slotTicketCount}
+AI agent: ${aiAgentCount} | ${region} agent: ${humanAgentCount}`;
 
   msg +=
 `\n*Assigned:*
@@ -2117,7 +2117,7 @@ async function main() {
   // which over-counts SLA elapsed time.  The audit log records when someone clicked
   // "Make into ticket", which is the correct SLA start time.
   const [created, conversionTimes, prioAuditResult] = await Promise.all([
-    scanCreatedDuringShift({ slot, pylonToken, allRosterIds: slotRosterIds }),
+    scanCreatedDuringShift({ slot, pylonToken, allRosterIds }),
     fetchTicketConversionTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
     fetchPriorityChangeTimes({ pylonToken, lookbackDays: scanBLookbackDays }),
   ]);
@@ -2126,9 +2126,14 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  // Assigned breakdown — show only this sub-region's engineers.
-  const slotBreakdown = formatAssignedBreakdownForShift(slot, created.issues, assigneeIdToName);
-  const allRegionsBreakdown = slotBreakdown.pylon;
+  // Assigned breakdown + per-region new-ticket counts, both derived from created.issues.
+  const regionBreakdowns = allSubRegions.map(r => {
+    const bd = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
+    return { label: SUB_REGION_LABELS[r], pylon: bd.pylon, count: bd.assignedCount };
+  });
+  const allRegionsBreakdown  = regionBreakdowns.map(b => `[${b.label}] ${b.pylon}`).join("\n");
+  const slotRegionIdx        = allSubRegions.indexOf(slot);
+  const slotTicketCount      = slotRegionIdx >= 0 ? regionBreakdowns[slotRegionIdx].count : 0;
 
   // US and APAC posts show a paired lead — one from each sub-region, rotating together.
   const shiftLead =
@@ -2235,7 +2240,7 @@ async function main() {
     headerLabel,
     shiftLead,
     datePt,
-    newTicketsDuringShiftCount,
+    slotTicketCount,
     aiAgentCount,
     humanAgentCount,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
@@ -2264,7 +2269,7 @@ async function main() {
     datePt,
     headerLabel,
     newTicketsDuringShiftCount,
-    assigned: slotBreakdown.pylon,
+    assigned: allRegionsBreakdown,
     frP0P1: metrics.frP0P1,
     frP2P3: metrics.frP2P3,
     slaBreached: metrics.slaBreached,
