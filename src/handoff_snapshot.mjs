@@ -1939,7 +1939,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 3;
       const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "biz";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
-      const threshold = coverage === "biz" ? 24 * 3600 : 72 * 3600;
+      const threshold = coverage === "biz" ? 24 * 3600 : 48 * 3600;
       if (elapsed > threshold) {
         ids.waitP2P3.add(issueId);
         waitP2P3Details.set(issueId, {
