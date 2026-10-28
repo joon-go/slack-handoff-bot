@@ -1337,43 +1337,28 @@ AI agents: ${aiAgentCount} | ${region} agents: ${slotTicketCount}`;
 `\n*Human Agents:*
 ${newTicketsAssignedPylonBreakdown}`;
 
-  if (entFrPending > 0) {
-    msg += `\n🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
-    if (entFrPendingLines) msg += `\n${entFrPendingLines}`;
-  }
+  msg += `\n🏢 <${SLACK_LINKS.entFrPending}|*Enterprise FR Pending*>: ${entFrPending}`;
+  if (entFrPendingLines) msg += `\n${entFrPendingLines}`;
 
-  if (handoffSuggestionLines) {
-    msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}\n${handoffSuggestionLines}`;
-  }
+  msg += `\n🔀 *Enterprise Region Mismatch:* ${suggestionCount}`;
+  if (handoffSuggestionLines) msg += `\n${handoffSuggestionLines}`;
 
-  if (frP0P1 > 0) {
-    msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
-    if (p0p1IssueLines) msg += `\n${p0p1IssueLines}`;
-  }
+  msg += `\n${eP0P1} ${frP0P1Label}: ${frP0P1}`;
+  if (p0p1IssueLines) msg += `\n${p0p1IssueLines}`;
 
-  if (frP2P3 > 0) {
-    msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
-  }
+  msg += `\n${eP2P3} ${frP2P3Label}: ${frP2P3}`;
 
-  if (slaBreached > 0) {
-    msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
-    if (slaBreachedLines) msg += `\n${slaBreachedLines}`;
-  }
+  msg += `\n${eSlaBreached} *FR SLA Breached:* ${slaBreached}`;
+  if (slaBreachedLines) msg += `\n${slaBreachedLines}`;
 
-  if (waitP0P1 > 0) {
-    msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
-    if (waitP0P1Lines) msg += `\n${waitP0P1Lines}`;
-  }
+  msg += `\n${eWaitP0P1} *P0/P1 Update SLA Breached (>1 day):* ${waitP0P1}`;
+  if (waitP0P1Lines) msg += `\n${waitP0P1Lines}`;
 
-  if (waitP2P3 > 0) {
-    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
-    if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
-  }
+  msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
+  if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
 
-  if (handoffIssues > 0) {
-    msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
-    if (handoffIssueLines) msg += `\n${handoffIssueLines}`;
-  }
+  msg += `\n${eHandoff} ${handoffLabel}: ${handoffIssues}`;
+  if (handoffIssueLines) msg += `\n${handoffIssueLines}`;
 
   if (truncationWarnings && truncationWarnings.length > 0) {
     msg += `\n\n⚠️ *Warning: Results truncated at MAX_PAGES limit*`;
