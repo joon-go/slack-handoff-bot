@@ -109,8 +109,8 @@ const SLA_COVERAGE = {
   lite:               ["biz",      "biz",      "biz",      "biz"     ],
   pro:                ["biz",      "biz",      "biz",      "biz"     ],
   pro_plus:           ["biz",      "biz",      "biz",      "biz"     ], // legacy Pro model
-  enterprise:         ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
-  enterprise_elite:   ["calendar", "weekday",  "weekday",  "weekday" ], // P0 24x7; P1-P3 M-F only
+  enterprise:         ["calendar", "weekday",  "calendar", "calendar"], // P0 24x7; P1 M-F; P2/P3 48 cal hrs
+  enterprise_elite:   ["calendar", "weekday",  "calendar", "calendar"], // P0 24x7; P1 M-F; P2/P3 48 cal hrs
   community:          ["biz",      "biz",      "biz",      "biz"     ],
   unknown:            ["biz",      "biz",      "biz",      "biz"     ],
 };
@@ -1366,7 +1366,7 @@ ${newTicketsAssignedPylonBreakdown}`;
   }
 
   if (waitP2P3 > 0) {
-    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>3 days):* ${waitP2P3}`;
+    msg += `\n${eWaitP2P3} *P2/P3 Update SLA Breached (>48 hrs):* ${waitP2P3}`;
     if (waitP2P3Lines) msg += `\n${waitP2P3Lines}`;
   }
 
@@ -1819,7 +1819,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds }) {
  *
  * Update-frequency thresholds (best effort until per-tier values are defined):
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
- *   P2/P3 (medium/low):  customer last spoke > 3 days ago
+ *   P2/P3 (medium/low):  customer last spoke > 48 cal hrs ago
  */
 async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
   const nowPt = ptNow();
@@ -1957,7 +1957,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioIdx = PRIORITY_IDX[candidate.prioRaw] ?? 3;
       const coverage = SLA_COVERAGE[candidate.tier]?.[prioIdx] ?? "biz";
       const elapsed = elapsedSeconds(status.latestPublicMsgTime.toISO(), nowPt, coverage);
-      const threshold = coverage === "biz" ? 24 * 3600 : 72 * 3600;
+      const threshold = coverage === "biz" ? 24 * 3600 : 48 * 3600;
       if (elapsed > threshold) {
         ids.waitP2P3.add(issueId);
         waitP2P3Details.set(issueId, {
