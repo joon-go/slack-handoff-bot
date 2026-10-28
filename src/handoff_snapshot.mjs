@@ -1334,7 +1334,7 @@ function buildSlackHandoffMessage({
 AI agents: ${aiAgentCount} | ${region} agents: ${slotTicketCount}`;
 
   msg +=
-`\n*Assigned:*
+`\n*Human Agents:*
 ${newTicketsAssignedPylonBreakdown}`;
 
   if (entFrPending > 0) {
@@ -2043,7 +2043,7 @@ async function main() {
 
   // Resolve roster display names to IDs once — used by all four scans.
   // ID-based matching is rename-proof; names in rosters.json are the source of truth.
-  const allSubRegions = ["apac_india", "apac_australia", "emea", "us_west", "us_east"];
+  const allSubRegions = ["apac_australia", "apac_india", "emea", "us_east", "us_west"];
   const allRosterNames = allSubRegions.flatMap(r => REGION_ROSTERS[r] || []);
   const allRosterIds = new Set(
     allRosterNames
