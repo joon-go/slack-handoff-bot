@@ -23,8 +23,14 @@ import { fileURLToPath } from "url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PD_API_BASE = "https://api.pagerduty.com";
 
-const REGION_DISPLAY = { us: "Americas", apac: "APAC", emea: "EMEA" };
-const REGION_ORDER   = ["EMEA", "Americas", "APAC"];
+const REGION_DISPLAY = {
+  emea:           "EMEA",
+  us_east:        "US East",
+  us_west:        "US West",
+  apac_india:     "APAC India",
+  apac_australia: "APAC Australia",
+};
+const REGION_ORDER = ["EMEA", "US East", "US West", "APAC India", "APAC Australia"];
 
 function loadRosters() {
   const path = resolve(__dirname, "..", "config", "rosters.json");
@@ -36,7 +42,7 @@ function loadRosters() {
 // the PD name starts with the same tokens; "Rob" does NOT match "Robert Norrie".
 function matchRosterRegion(pdName, rosters) {
   const pdTokens = pdName.toLowerCase().split(/\s+/);
-  for (const region of ["us", "apac", "emea"]) {
+  for (const region of ["emea", "us_west", "us_east", "apac_india", "apac_australia"]) {
     for (const name of rosters[region] ?? []) {
       const rosterTokens = name.toLowerCase().split(/\s+/);
       // Compare up to the shorter name's token count so "Mohan Kumar" matches
@@ -61,11 +67,17 @@ async function pdGet(token, path) {
   return res.json();
 }
 
-// Returns the final (override-aware) schedule entries for the given window.
-async function fetchFinalScheduleEntries(token, scheduleId, since, until) {
+// Returns schedule entries split into explicit overrides and the merged final schedule.
+// PagerDuty's final_schedule may not include override-only windows (where the base
+// schedule has no entry but an override was created). By returning both sets
+// separately, callers can process overrides first so they take precedence.
+async function fetchScheduleEntries(token, scheduleId, since, until) {
   const params = new URLSearchParams({ since, until, time_zone: "UTC" });
   const json = await pdGet(token, `/schedules/${scheduleId}?${params}`);
-  return json?.schedule?.final_schedule?.rendered_schedule_entries ?? [];
+  return {
+    overrideEntries: json?.schedule?.overrides_subschedule?.rendered_schedule_entries ?? [],
+    finalEntries:    json?.schedule?.final_schedule?.rendered_schedule_entries ?? [],
+  };
 }
 
 async function fetchUserEmail(token, userId) {
@@ -181,14 +193,35 @@ async function main() {
   const { since, until, label } = getWeekendWindow();
   console.log(`[ONCALL] Querying schedule ${scheduleId} for ${label} (${since} – ${until})`);
 
-  const entries = await fetchFinalScheduleEntries(pdToken, scheduleId, since, until);
-  console.log(`[ONCALL] Final schedule entries: ${entries.length}`);
+  const { overrideEntries, finalEntries } = await fetchScheduleEntries(pdToken, scheduleId, since, until);
+  console.log(`[ONCALL] Override entries: ${overrideEntries.length}, Final schedule entries: ${finalEntries.length}`);
 
-  // Deduplicate by user ID — each engineer appears once per region per weekend.
-  const seen = new Set();
-  const regionMap = {};
+  const seen          = new Set();
+  const regionMap     = {};
+  const lockedRegions = new Set(); // regions claimed by an explicit PD override
 
-  for (const entry of entries) {
+  // --- Pass 1: explicit overrides take precedence over the base schedule ---
+  for (const entry of overrideEntries) {
+    const pdUser = entry.user;
+    if (!pdUser?.id || seen.has(pdUser.id)) continue;
+    seen.add(pdUser.id);
+
+    const name   = pdUser.summary ?? pdUser.name ?? "";
+    const region = matchRosterRegion(name, rosters);
+    if (!region) {
+      console.warn(`[ONCALL] "${name}" (override) not found in rosters.json — skipping`);
+      continue;
+    }
+
+    const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
+    regionMap[displayRegion] = engineer;
+    lockedRegions.add(displayRegion);
+    console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
+  }
+
+  // --- Pass 2: base schedule fills regions not covered by an explicit override ---
+  for (const entry of finalEntries) {
     const pdUser = entry.user;
     if (!pdUser?.id || seen.has(pdUser.id)) continue;
     seen.add(pdUser.id);
@@ -200,8 +233,10 @@ async function main() {
       continue;
     }
 
-    const displayRegion = REGION_DISPLAY[region] ?? region;
-    const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
+    const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    if (lockedRegions.has(displayRegion)) continue; // override already set for this region
+
+    const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
     regionMap[displayRegion] = engineer;
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
