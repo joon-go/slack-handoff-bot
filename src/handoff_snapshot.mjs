@@ -1823,7 +1823,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
  *   P0/P1 (urgent/high): customer last spoke > 1 day ago
  *   P2/P3 (medium/low):  customer last spoke > 48 cal hrs ago
  */
-async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds }) {
+async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }) {
   const nowPt = ptNow();
 
   const WAITING_FILTER = { field: "state", operator: "equals", value: "waiting_on_you" };
@@ -1846,22 +1846,25 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
     for (const issue of data) {
       if (!issue?.id) continue;
-      if (!allRosterIds.has(issue?.assignee?.id)) continue;
+      const assigneeId = issue?.assignee?.id;
+      if (!allRosterIds.has(assigneeId)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
       // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
-        handoffItems.set(issue.id, {
-          id: issue.id,
-          number: issue.number,
-          priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
-          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
-          meetingRequired: isMeetingRequired(issue),
-        });
+      if (slotRosterIds.has(assigneeId)) {
+        const handoffSlug = getHandoffRegionValue(issue);
+        if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+          handoffItems.set(issue.id, {
+            id: issue.id,
+            number: issue.number,
+            priorityLabel: prioLabel,
+            assigneeId: assigneeId ?? null,
+            handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+            meetingRequired: isMeetingRequired(issue),
+          });
+        }
       }
 
       const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
@@ -1871,16 +1874,19 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
         priorityLabel: prioLabel,
         prioRaw,
         tier: tierRaw.replace(/-/g, "_"),
-        assigneeId: issue?.assignee?.id ?? null,
+        assigneeId: assigneeId ?? null,
         accountId: issue?.account?.id ?? null,
         subject: issue?.title ?? "(No subject)",
       };
 
-      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
-        waitP0P1Candidates.set(issue.id, candidate);
-      }
-      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
-        waitP2P3Candidates.set(issue.id, candidate);
+      // Wait metrics only for the current slot's engineers.
+      if (slotRosterIds.has(assigneeId)) {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+          waitP0P1Candidates.set(issue.id, candidate);
+        }
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+          waitP2P3Candidates.set(issue.id, candidate);
+        }
       }
     }
 
@@ -1985,7 +1991,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
   const issueByNumber = new Map();
   for (const c of allWaitCandidates.values())
-    issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null });
+    issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null, state: "waiting_on_you" });
 
   return {
     waitP0P1: ids.waitP0P1.size,
@@ -2149,7 +2155,7 @@ async function main() {
   // Pass D (waiting_on_customer + on_hold handoff) are independent — run in parallel.
   const [metrics, waiting, handoff] = await Promise.all([
     scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes, priorityChangeTimes, allRosterIds: slotRosterIds }),
-    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds: slotRosterIds }),
+    scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds, slotRosterIds }),
     scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }),
   ]);
 
@@ -2173,12 +2179,11 @@ async function main() {
     info.accountName = acctCache.get(info.accountId) ?? null;
   }
 
-  // Enrich and filter suggestions from scan data.
-  // Drop suggestions where the issue is closed/unknown-state or has been reassigned.
+  // Enrich and filter suggestions: only show waiting_on_you issues (Waiting on Support).
   const enrichedSuggestions = slotSuggestions
     .filter(s => {
       const info = issueByNumber.get(s.issueNumber);
-      return info !== undefined && info.assigneeId === s.assigneeId;
+      return info !== undefined && info.assigneeId === s.assigneeId && info.state === "waiting_on_you";
     })
     .map(s => {
       const info = issueByNumber.get(s.issueNumber);
