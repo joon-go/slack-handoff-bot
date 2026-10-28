@@ -2075,7 +2075,7 @@ async function main() {
     apac_india:     ["EMEA UK"],
     apac_australia: ["APAC India"],
     emea:           ["US East", "US West"],
-    us_east:        [],
+    us_east:        ["US West"],
     us_west:        ["APAC Australia", "APAC India", "APAC"],
   };
   const slotTzWindows = SLOT_TZ_WINDOWS[slot] || [];
