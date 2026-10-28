@@ -1831,6 +1831,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
   const handoffItems = new Map();        // waiting_on_you issues with hand_off_region set
   const waitP0P1Candidates = new Map();
   const waitP2P3Candidates = new Map();
+  const suggestionCandidates = new Map(); // all-roster waiting_on_you issues for suggestion validation
 
   let cursor = null;
   const seenCursors = new Set();
@@ -1878,6 +1879,9 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
         accountId: issue?.account?.id ?? null,
         subject: issue?.title ?? "(No subject)",
       };
+
+      // Record for suggestion validation (all roster engineers, not just slot).
+      if (!suggestionCandidates.has(issue.id)) suggestionCandidates.set(issue.id, candidate);
 
       // Wait metrics only for the current slot's engineers.
       if (slotRosterIds.has(assigneeId)) {
@@ -1990,7 +1994,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       : "";
 
   const issueByNumber = new Map();
-  for (const c of allWaitCandidates.values())
+  for (const c of suggestionCandidates.values())
     issueByNumber.set(c.number, { accountName: null, accountId: c.accountId ?? null, priorityLabel: c.priorityLabel, assigneeId: c.assigneeId ?? null, state: "waiting_on_you" });
 
   return {
