@@ -1330,8 +1330,8 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*${region} new intake:* ${slotTicketCount}
-AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
+*New tickets assigned:* ${slotTicketCount}
+AI agent: ${aiAgentCount} | ${region} agent: ${humanAgentCount}`;
 
   msg +=
 `\n*Assigned:*
