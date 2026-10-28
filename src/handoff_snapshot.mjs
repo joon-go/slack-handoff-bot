@@ -1292,7 +1292,7 @@ function buildSlackHandoffMessage({
   headerLabel,
   shiftLead,
   datePt,
-  newTicketsByRegion,
+  slotTicketCount,
   aiAgentCount,
   humanAgentCount,
   newTicketsAssignedPylonBreakdown,
@@ -1330,7 +1330,7 @@ function buildSlackHandoffMessage({
 `*<${headerLabel} team handoff>*
 *Shift Lead:* ${shiftLead}
 *Date:* ${datePt}
-*New tickets:* ${newTicketsByRegion}
+*New tickets during ${region}:* ${slotTicketCount}
 AI Agent: ${aiAgentCount} | Human Agent: ${humanAgentCount}`;
 
   msg +=
@@ -2131,8 +2131,9 @@ async function main() {
     const bd = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
     return { label: SUB_REGION_LABELS[r], pylon: bd.pylon, count: bd.assignedCount };
   });
-  const allRegionsBreakdown = regionBreakdowns.map(b => `[${b.label}] ${b.pylon}`).join("\n");
-  const newTicketsByRegion  = regionBreakdowns.map(b => `${b.label}: ${b.count}`).join(" | ");
+  const allRegionsBreakdown  = regionBreakdowns.map(b => `[${b.label}] ${b.pylon}`).join("\n");
+  const slotRegionIdx        = allSubRegions.indexOf(slot);
+  const slotTicketCount      = slotRegionIdx >= 0 ? regionBreakdowns[slotRegionIdx].count : 0;
 
   // US and APAC posts show a paired lead — one from each sub-region, rotating together.
   const shiftLead =
@@ -2239,7 +2240,7 @@ async function main() {
     headerLabel,
     shiftLead,
     datePt,
-    newTicketsByRegion,
+    slotTicketCount,
     aiAgentCount,
     humanAgentCount,
     newTicketsAssignedPylonBreakdown: allRegionsBreakdown,
