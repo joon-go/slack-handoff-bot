@@ -2,5 +2,10 @@
 Description=Handoff snapshot APAC Australia
 
 [Service]
-ExecStart=/usr/bin/node /opt/handoff/handoff_snapshot.mjs apac_australia
-EnvironmentFile=/home/joon/slack-handoff-bot/.env
+Type=oneshot
+Environment=PYLON_TOKEN=""
+Environment=SLACK_BOT_TOKEN=""
+#Environment=PYLON_MESSAGES_CONCURRENCY=1
+Environment=SLACK_CHANNEL=#csorg-support-handoff
+WorkingDirectory=/home/joon/slack-handoff-bot
+ExecStart=/usr/bin/node src/handoff_snapshot.mjs apac_australia
