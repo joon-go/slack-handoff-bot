@@ -1869,11 +1869,13 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
 
       if (allRosterIds.has(assigneeId) && !suggestionCandidates.has(issue.id)) suggestionCandidates.set(issue.id, candidate);
 
-      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
-        waitP0P1Candidates.set(issue.id, candidate);
-      }
-      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
-        waitP2P3Candidates.set(issue.id, candidate);
+      if (assigneeId !== AI_SUPPORT_AGENT_ID) {
+        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+          waitP0P1Candidates.set(issue.id, candidate);
+        }
+        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+          waitP2P3Candidates.set(issue.id, candidate);
+        }
       }
     }
 
