@@ -1516,6 +1516,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       const assigneeId = issue?.assignee?.id;
       const isAi = assigneeId === AI_SUPPORT_AGENT_ID;
       if (!isAi && !isTeamL1L2(issue)) continue;
+      if (issue.type !== "ticket") continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
@@ -1836,6 +1837,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       if (!issue?.id) continue;
       const assigneeId = issue?.assignee?.id;
       if (!isTeamL1L2(issue)) continue;
+      if (issue.type !== "ticket") continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
