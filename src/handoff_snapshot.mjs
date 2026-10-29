@@ -1867,17 +1867,13 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
         subject: issue?.title ?? "(No subject)",
       };
 
-      // Record for suggestion validation (all roster engineers, not just slot).
       if (!suggestionCandidates.has(issue.id)) suggestionCandidates.set(issue.id, candidate);
 
-      // Wait metrics only for the current slot's engineers.
-      if (slotRosterIds.has(assigneeId)) {
-        if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
-          waitP0P1Candidates.set(issue.id, candidate);
-        }
-        if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
-          waitP2P3Candidates.set(issue.id, candidate);
-        }
+      if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
+        waitP0P1Candidates.set(issue.id, candidate);
+      }
+      if (prioRaw && P2_P3_PRIORITIES.has(prioRaw) && !waitP2P3Candidates.has(issue.id)) {
+        waitP2P3Candidates.set(issue.id, candidate);
       }
     }
 
