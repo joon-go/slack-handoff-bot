@@ -1533,6 +1533,9 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
         });
       }
 
+      // SLA metrics are tickets only; conversations have no SLA obligations.
+      if (issue.type !== "ticket") continue;
+
       // Count AI-agent-handled issues separately; exclude from all SLA buckets.
       if (isAi) {
         aiAgentOpenCount++;
@@ -1868,6 +1871,9 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       };
 
       if (allRosterIds.has(assigneeId) && !suggestionCandidates.has(issue.id)) suggestionCandidates.set(issue.id, candidate);
+
+      // Wait SLA metrics are tickets only; conversations have no SLA obligations.
+      if (issue.type !== "ticket") continue;
 
       if (assigneeId !== AI_SUPPORT_AGENT_ID) {
         if (prioRaw && P0_P1_PRIORITIES.has(prioRaw) && !waitP0P1Candidates.has(issue.id)) {
