@@ -1835,7 +1835,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
     for (const issue of data) {
       if (!issue?.id) continue;
       const assigneeId = issue?.assignee?.id;
-      if (!allRosterIds.has(assigneeId)) continue;
+      if (!isTeamL1L2(issue)) continue;
 
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
