@@ -150,18 +150,10 @@ function getWeekendWindow() {
   };
 }
 
-const REGION_TIMEZONE = {
-  "EMEA":           "Europe/London",
-  "US East":        "America/New_York",
-  "US West":        "America/Los_Angeles",
-  "APAC India":     "Asia/Kolkata",
-  "APAC Australia": "Australia/Sydney",
-};
-
 // Format a PagerDuty ISO start/end pair in the region's local timezone,
 // e.g. "Sat 09:00–Mon 09:00 BST".
-function formatCoverageWindow(start, end, displayRegion) {
-  const tz = REGION_TIMEZONE[displayRegion] ?? "UTC";
+function formatCoverageWindow(start, end, regionSlug, rosters) {
+  const tz = rosters.region_timezones?.[regionSlug] ?? "UTC";
   const fmtParts = new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     weekday: "short",
@@ -245,7 +237,7 @@ async function main() {
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -268,7 +260,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -283,8 +275,8 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    const { mention, start, end } = regionMap[region];
-    const window = start && end ? ` (${formatCoverageWindow(start, end, region)})` : "";
+    const { mention, slug, start, end } = regionMap[region];
+    const window = start && end ? ` (${formatCoverageWindow(start, end, slug, rosters)})` : "";
     lines.push(`${region}: ${mention}${window}`);
   }
 
