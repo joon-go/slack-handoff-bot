@@ -152,9 +152,9 @@ function getWeekendWindow() {
   };
 }
 
-// Format a PagerDuty ISO start/end pair in the region's local timezone,
-// e.g. "Sat 09:00–Mon 09:00 BST".
-function formatCoverageWindow(start, end, regionSlug, rosters) {
+// Format the fixed weekend window (since/until UTC ISO strings) in a region's local timezone,
+// e.g. "Sat 02:00–Mon 02:00 GMT".
+function formatCoverageWindow(since, until, regionSlug, rosters) {
   const tz = rosters.region_timezones?.[regionSlug] ?? "UTC";
   const fmtParts = new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
@@ -168,8 +168,8 @@ function formatCoverageWindow(start, end, regionSlug, rosters) {
     const parts = Object.fromEntries(fmtParts.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
     return { day: parts.weekday, time: `${parts.hour}:${parts.minute}`, tz: parts.timeZoneName };
   };
-  const s = extract(start);
-  const e = extract(end);
+  const s = extract(since);
+  const e = extract(until);
   return `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`;
 }
 
@@ -239,7 +239,7 @@ async function main() {
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -262,7 +262,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -277,8 +277,8 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    const { mention, slug, start, end } = regionMap[region];
-    const window = start && end ? ` (${formatCoverageWindow(start, end, slug, rosters)})` : "";
+    const { mention, slug } = regionMap[region];
+    const window = ` (${formatCoverageWindow(since, until, slug, rosters)})`;
     lines.push(`${region}: ${mention}${window}`);
   }
 
