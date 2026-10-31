@@ -30,7 +30,7 @@ const REGION_DISPLAY = {
   apac_india:     "APAC India",
   apac_australia: "APAC Australia",
 };
-const REGION_ORDER = ["EMEA", "US East", "US West", "APAC India", "APAC Australia"];
+const REGION_ORDER = ["APAC Australia", "APAC India", "EMEA", "US East", "US West"];
 
 function loadRosters() {
   const path = resolve(__dirname, "..", "config", "rosters.json");
@@ -106,7 +106,8 @@ async function postSlackMessage(slackToken, channel, text) {
   return json;
 }
 
-function ptMidnightUtc(year, month, day) {
+// Returns the UTC instant for a given PT date + hour of day (handles PST/PDT automatically).
+function ptHourUtc(year, month, day, hour) {
   const noonUtc = new Date(Date.UTC(year, month - 1, day, 12));
   const tzStr = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -117,9 +118,11 @@ function ptMidnightUtc(year, month, day) {
     .formatToParts(noonUtc)
     .find((p) => p.type === "timeZoneName")?.value ?? "GMT-7";
   const offsetHours = -Number(tzStr.replace("GMT", "") || "-7");
-  return new Date(Date.UTC(year, month - 1, day, offsetHours, 0, 0));
+  // offsetHours + hour may exceed 23 — Date.UTC handles the overflow correctly.
+  return new Date(Date.UTC(year, month - 1, day, offsetHours + hour, 0, 0));
 }
 
+// Window: Friday 18:00 PT → Sunday 18:00 PT.
 function getWeekendWindow() {
   const now = new Date();
   const ptDow = new Intl.DateTimeFormat("en-US", {
@@ -127,10 +130,10 @@ function getWeekendWindow() {
     weekday: "short",
   }).format(now);
   const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(ptDow);
-  const daysToSat = ((6 - dowIndex + 7) % 7) || 7;
+  const daysToFri = (5 - dowIndex + 7) % 7; // 0 when today is Friday
 
-  const approxSat = new Date(now.getTime() + daysToSat * 86_400_000);
-  const approxMon = new Date(now.getTime() + (daysToSat + 2) * 86_400_000);
+  const approxFri = new Date(now.getTime() + daysToFri * 86_400_000);
+  const approxSun = new Date(now.getTime() + (daysToFri + 2) * 86_400_000);
 
   const ptDateFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -139,15 +142,46 @@ function getWeekendWindow() {
   const ptParts = (d) =>
     Object.fromEntries(ptDateFmt.formatToParts(d).map((p) => [p.type, p.value]));
 
-  const satPt = ptParts(approxSat);
-  const sunPt = ptParts(new Date(approxSat.getTime() + 86_400_000));
-  const monPt = ptParts(approxMon);
+  const friPt = ptParts(approxFri);
+  const sunPt = ptParts(approxSun);
 
   return {
-    since: ptMidnightUtc(+satPt.year, +satPt.month, +satPt.day).toISOString(),
-    until: ptMidnightUtc(+monPt.year, +monPt.month, +monPt.day).toISOString(),
-    label: `${satPt.month}/${satPt.day}/${satPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`,
+    since:    ptHourUtc(+friPt.year, +friPt.month, +friPt.day, 18).toISOString(),
+    until:    ptHourUtc(+sunPt.year, +sunPt.month, +sunPt.day, 18).toISOString(),
+    label:    `${friPt.month}/${friPt.day}/${friPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`,
+    friYear:  +friPt.year,
+    friMonth: +friPt.month,
+    friDay:   +friPt.day,
   };
+}
+
+// Format the region's fixed shift window (defined in PT in rosters.json) in the
+// region's local timezone. friYear/Month/Day is the Friday the weekend starts on;
+// start_day/end_day offsets are 0=Friday, 1=Saturday, 2=Sunday.
+function formatCoverageWindow(regionSlug, rosters, friYear, friMonth, friDay) {
+  const tz       = rosters.region_timezones?.[regionSlug] ?? "UTC";
+  const shiftKey = rosters.region_shift?.[regionSlug];
+  const shift    = rosters.shift_windows_pt?.[shiftKey];
+  if (!shift) return null;
+
+  const startUtc = ptHourUtc(friYear, friMonth, friDay + shift.start_day, shift.start_hour);
+  const endUtc   = ptHourUtc(friYear, friMonth, friDay + shift.end_day,   shift.end_hour);
+
+  const fmtParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+    hour12: false,
+  });
+  const extract = (d) => {
+    const parts = Object.fromEntries(fmtParts.formatToParts(d).map(p => [p.type, p.value]));
+    return { day: parts.weekday, time: `${parts.hour}:${parts.minute}`, tz: parts.timeZoneName };
+  };
+  const s = extract(startUtc);
+  const e = extract(endUtc);
+  return `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`;
 }
 
 async function resolveSlackMention(pdToken, slackToken, pdUser) {
@@ -190,7 +224,7 @@ async function main() {
   if (!scheduleId) throw new Error("Missing required env var: PD_SCHEDULE_ID");
 
   const rosters = loadRosters();
-  const { since, until, label } = getWeekendWindow();
+  const { since, until, label, friYear, friMonth, friDay } = getWeekendWindow();
   console.log(`[ONCALL] Querying schedule ${scheduleId} for ${label} (${since} – ${until})`);
 
   const { overrideEntries, finalEntries } = await fetchScheduleEntries(pdToken, scheduleId, since, until);
@@ -206,16 +240,17 @@ async function main() {
     if (!pdUser?.id || seen.has(pdUser.id)) continue;
     seen.add(pdUser.id);
 
-    const name   = pdUser.summary ?? pdUser.name ?? "";
-    const region = matchRosterRegion(name, rosters);
+    const rawName = pdUser.summary ?? pdUser.name ?? "";
+    const name    = rosters.pd_aliases?.[rawName] ?? rawName;
+    const region  = matchRosterRegion(name, rosters);
     if (!region) {
-      console.warn(`[ONCALL] "${name}" (override) not found in rosters.json — skipping`);
+      console.warn(`[ONCALL] "${rawName}" (override) not found in rosters.json — skipping`);
       continue;
     }
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = engineer;
+    regionMap[displayRegion] = { ...engineer, slug: region };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -226,10 +261,11 @@ async function main() {
     if (!pdUser?.id || seen.has(pdUser.id)) continue;
     seen.add(pdUser.id);
 
-    const name   = pdUser.summary ?? pdUser.name ?? "";
-    const region = matchRosterRegion(name, rosters);
+    const rawName = pdUser.summary ?? pdUser.name ?? "";
+    const name    = rosters.pd_aliases?.[rawName] ?? rawName;
+    const region  = matchRosterRegion(name, rosters);
     if (!region) {
-      console.warn(`[ONCALL] "${name}" not found in rosters.json — skipping`);
+      console.warn(`[ONCALL] "${rawName}" not found in rosters.json — skipping`);
       continue;
     }
 
@@ -237,7 +273,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = engineer;
+    regionMap[displayRegion] = { ...engineer, slug: region };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -252,7 +288,10 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    lines.push(`${region}: ${regionMap[region].mention}`);
+    const { mention, slug } = regionMap[region];
+    const coverage = formatCoverageWindow(slug, rosters, friYear, friMonth, friDay);
+    const window = coverage ? ` (${coverage})` : "";
+    lines.push(`${region}: ${mention}${window}`);
   }
 
   await postSlackMessage(slackToken, channel, lines.join("\n"));
