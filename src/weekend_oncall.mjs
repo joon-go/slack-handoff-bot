@@ -30,7 +30,7 @@ const REGION_DISPLAY = {
   apac_india:     "APAC India",
   apac_australia: "APAC Australia",
 };
-const REGION_ORDER = ["EMEA", "US East", "US West", "APAC India", "APAC Australia"];
+const REGION_ORDER = ["APAC Australia", "APAC India", "EMEA", "US East", "US West"];
 
 function loadRosters() {
   const path = resolve(__dirname, "..", "config", "rosters.json");
