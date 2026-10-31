@@ -239,7 +239,7 @@ async function main() {
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region };
+    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -262,7 +262,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region };
+    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -277,8 +277,8 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    const { mention, slug } = regionMap[region];
-    const window = ` (${formatCoverageWindow(since, until, slug, rosters)})`;
+    const { mention, slug, start, end } = regionMap[region];
+    const window = ` (${formatCoverageWindow(start, end, slug, rosters)})`;
     lines.push(`${region}: ${mention}${window}`);
   }
 
