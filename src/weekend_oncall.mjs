@@ -146,16 +146,27 @@ function getWeekendWindow() {
   const sunPt = ptParts(approxSun);
 
   return {
-    since: ptHourUtc(+friPt.year, +friPt.month, +friPt.day, 18).toISOString(),
-    until: ptHourUtc(+sunPt.year, +sunPt.month, +sunPt.day, 18).toISOString(),
-    label: `${friPt.month}/${friPt.day}/${friPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`,
+    since:    ptHourUtc(+friPt.year, +friPt.month, +friPt.day, 18).toISOString(),
+    until:    ptHourUtc(+sunPt.year, +sunPt.month, +sunPt.day, 18).toISOString(),
+    label:    `${friPt.month}/${friPt.day}/${friPt.year}-${sunPt.month}/${sunPt.day}/${sunPt.year}`,
+    friYear:  +friPt.year,
+    friMonth: +friPt.month,
+    friDay:   +friPt.day,
   };
 }
 
-// Format the fixed weekend window (since/until UTC ISO strings) in a region's local timezone,
-// e.g. "Sat 02:00–Mon 02:00 GMT".
-function formatCoverageWindow(since, until, regionSlug, rosters) {
-  const tz = rosters.region_timezones?.[regionSlug] ?? "UTC";
+// Format the region's fixed shift window (defined in PT in rosters.json) in the
+// region's local timezone. friYear/Month/Day is the Friday the weekend starts on;
+// start_day/end_day offsets are 0=Friday, 1=Saturday, 2=Sunday.
+function formatCoverageWindow(regionSlug, rosters, friYear, friMonth, friDay) {
+  const tz       = rosters.region_timezones?.[regionSlug] ?? "UTC";
+  const shiftKey = rosters.region_shift?.[regionSlug];
+  const shift    = rosters.shift_windows_pt?.[shiftKey];
+  if (!shift) return null;
+
+  const startUtc = ptHourUtc(friYear, friMonth, friDay + shift.start_day, shift.start_hour);
+  const endUtc   = ptHourUtc(friYear, friMonth, friDay + shift.end_day,   shift.end_hour);
+
   const fmtParts = new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     weekday: "short",
@@ -164,12 +175,12 @@ function formatCoverageWindow(since, until, regionSlug, rosters) {
     timeZoneName: "short",
     hour12: false,
   });
-  const extract = (iso) => {
-    const parts = Object.fromEntries(fmtParts.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
+  const extract = (d) => {
+    const parts = Object.fromEntries(fmtParts.formatToParts(d).map(p => [p.type, p.value]));
     return { day: parts.weekday, time: `${parts.hour}:${parts.minute}`, tz: parts.timeZoneName };
   };
-  const s = extract(since);
-  const e = extract(until);
+  const s = extract(startUtc);
+  const e = extract(endUtc);
   return `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`;
 }
 
@@ -213,7 +224,7 @@ async function main() {
   if (!scheduleId) throw new Error("Missing required env var: PD_SCHEDULE_ID");
 
   const rosters = loadRosters();
-  const { since, until, label } = getWeekendWindow();
+  const { since, until, label, friYear, friMonth, friDay } = getWeekendWindow();
   console.log(`[ONCALL] Querying schedule ${scheduleId} for ${label} (${since} – ${until})`);
 
   const { overrideEntries, finalEntries } = await fetchScheduleEntries(pdToken, scheduleId, since, until);
@@ -239,7 +250,7 @@ async function main() {
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -262,7 +273,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = { ...engineer, slug: region, start: entry.start, end: entry.end };
+    regionMap[displayRegion] = { ...engineer, slug: region };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -277,8 +288,9 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    const { mention, slug, start, end } = regionMap[region];
-    const window = ` (${formatCoverageWindow(start, end, slug, rosters)})`;
+    const { mention, slug } = regionMap[region];
+    const coverage = formatCoverageWindow(slug, rosters, friYear, friMonth, friDay);
+    const window = coverage ? ` (${coverage})` : "";
     lines.push(`${region}: ${mention}${window}`);
   }
 

@@ -9,6 +9,18 @@
     "apac_india":     "Asia/Kolkata",
     "apac_australia": "Australia/Sydney"
   },
+  "region_shift": {
+    "apac_india":     "apac",
+    "apac_australia": "apac",
+    "emea":           "emea",
+    "us_east":        "us",
+    "us_west":        "us"
+  },
+  "shift_windows_pt": {
+    "apac": { "start_day": 0, "start_hour": 18, "end_day": 1, "end_hour": 3 },
+    "emea": { "start_day": 1, "start_hour": 1,  "end_day": 1, "end_hour": 10 },
+    "us":   { "start_day": 1, "start_hour": 9,  "end_day": 1, "end_hour": 18 }
+  },
   "emea":           ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
   "apac_india":     ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"],
   "apac_australia": ["Stacie", "Syed Haque"],
