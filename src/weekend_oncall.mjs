@@ -150,6 +150,18 @@ function getWeekendWindow() {
   };
 }
 
+// Format a PagerDuty ISO start/end pair as "Sat 07:00–Mon 07:00 UTC".
+function formatCoverageWindow(start, end) {
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const fmt = (iso) => {
+    const d = new Date(iso);
+    const h = String(d.getUTCHours()).padStart(2, "0");
+    const m = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${DAYS[d.getUTCDay()]} ${h}:${m}`;
+  };
+  return `${fmt(start)}–${fmt(end)} UTC`;
+}
+
 async function resolveSlackMention(pdToken, slackToken, pdUser) {
   const name  = pdUser.summary ?? pdUser.name ?? "Unknown";
   let   email = pdUser.email ?? null;
@@ -216,7 +228,7 @@ async function main() {
 
     const displayRegion = REGION_DISPLAY[region] ?? region.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     const engineer      = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = engineer;
+    regionMap[displayRegion] = { ...engineer, start: entry.start, end: entry.end };
     lockedRegions.add(displayRegion);
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name} (override)`);
   }
@@ -239,7 +251,7 @@ async function main() {
     if (lockedRegions.has(displayRegion)) continue; // override already set for this region
 
     const engineer = await resolveSlackMention(pdToken, slackToken, pdUser);
-    regionMap[displayRegion] = engineer;
+    regionMap[displayRegion] = { ...engineer, start: entry.start, end: entry.end };
     console.log(`[ONCALL] ${displayRegion}: ${engineer.name}`);
   }
 
@@ -254,7 +266,9 @@ async function main() {
 
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
-    lines.push(`${region}: ${regionMap[region].mention}`);
+    const { mention, start, end } = regionMap[region];
+    const window = start && end ? ` (${formatCoverageWindow(start, end)})` : "";
+    lines.push(`${region}: ${mention}${window}`);
   }
 
   await postSlackMessage(slackToken, channel, lines.join("\n"));
