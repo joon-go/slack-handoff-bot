@@ -1,4 +1,7 @@
 {
+  "pd_aliases": {
+    "Mohan Chennabore Saroja": "Mohan Kumar C S"
+  },
   "emea":           ["Dylan Bonar", "Tommy Lundy", "Robert Norrie", "Bryan Nalty", "Ozan Seckiner"],
   "apac_india":     ["Saurabh Lambe", "Chinmay Koratkar", "Mohan Kumar C S"],
   "apac_australia": ["Stacie", "Syed Haque"],

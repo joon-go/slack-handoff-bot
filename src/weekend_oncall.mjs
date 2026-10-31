@@ -206,10 +206,11 @@ async function main() {
     if (!pdUser?.id || seen.has(pdUser.id)) continue;
     seen.add(pdUser.id);
 
-    const name   = pdUser.summary ?? pdUser.name ?? "";
-    const region = matchRosterRegion(name, rosters);
+    const rawName = pdUser.summary ?? pdUser.name ?? "";
+    const name    = rosters.pd_aliases?.[rawName] ?? rawName;
+    const region  = matchRosterRegion(name, rosters);
     if (!region) {
-      console.warn(`[ONCALL] "${name}" (override) not found in rosters.json — skipping`);
+      console.warn(`[ONCALL] "${rawName}" (override) not found in rosters.json — skipping`);
       continue;
     }
 
@@ -226,10 +227,11 @@ async function main() {
     if (!pdUser?.id || seen.has(pdUser.id)) continue;
     seen.add(pdUser.id);
 
-    const name   = pdUser.summary ?? pdUser.name ?? "";
-    const region = matchRosterRegion(name, rosters);
+    const rawName = pdUser.summary ?? pdUser.name ?? "";
+    const name    = rosters.pd_aliases?.[rawName] ?? rawName;
+    const region  = matchRosterRegion(name, rosters);
     if (!region) {
-      console.warn(`[ONCALL] "${name}" not found in rosters.json — skipping`);
+      console.warn(`[ONCALL] "${rawName}" not found in rosters.json — skipping`);
       continue;
     }
 
