@@ -150,16 +150,33 @@ function getWeekendWindow() {
   };
 }
 
-// Format a PagerDuty ISO start/end pair as "Sat 07:00–Mon 07:00 UTC".
-function formatCoverageWindow(start, end) {
-  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const fmt = (iso) => {
-    const d = new Date(iso);
-    const h = String(d.getUTCHours()).padStart(2, "0");
-    const m = String(d.getUTCMinutes()).padStart(2, "0");
-    return `${DAYS[d.getUTCDay()]} ${h}:${m}`;
+const REGION_TIMEZONE = {
+  "EMEA":           "Europe/London",
+  "US East":        "America/New_York",
+  "US West":        "America/Los_Angeles",
+  "APAC India":     "Asia/Kolkata",
+  "APAC Australia": "Australia/Sydney",
+};
+
+// Format a PagerDuty ISO start/end pair in the region's local timezone,
+// e.g. "Sat 09:00–Mon 09:00 BST".
+function formatCoverageWindow(start, end, displayRegion) {
+  const tz = REGION_TIMEZONE[displayRegion] ?? "UTC";
+  const fmtParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+    hour12: false,
+  });
+  const extract = (iso) => {
+    const parts = Object.fromEntries(fmtParts.formatToParts(new Date(iso)).map(p => [p.type, p.value]));
+    return { day: parts.weekday, time: `${parts.hour}:${parts.minute}`, tz: parts.timeZoneName };
   };
-  return `${fmt(start)}–${fmt(end)} UTC`;
+  const s = extract(start);
+  const e = extract(end);
+  return `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`;
 }
 
 async function resolveSlackMention(pdToken, slackToken, pdUser) {
@@ -267,7 +284,7 @@ async function main() {
   const lines = [`*(Date: ${label})*`, "Weekend on-call duty support engineers."];
   for (const region of orderedRegions) {
     const { mention, start, end } = regionMap[region];
-    const window = start && end ? ` (${formatCoverageWindow(start, end)})` : "";
+    const window = start && end ? ` (${formatCoverageWindow(start, end, region)})` : "";
     lines.push(`${region}: ${mention}${window}`);
   }
 
