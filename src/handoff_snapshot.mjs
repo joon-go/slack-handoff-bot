@@ -125,7 +125,7 @@ const SLOT_CONFIG = {
   apac_australia: { headerLabel: "APAC Australia to APAC India" },
   emea:           { headerLabel: "EMEA to US East" },
   us_east:        { headerLabel: "US East to US West" },
-  us_west:        { headerLabel: "US West to APAC Australia" },
+  us_west:        { headerLabel: "US West to APAC" },
 };
 
 // Shift rosters for assignment breakdown (names must match Pylon user names).
