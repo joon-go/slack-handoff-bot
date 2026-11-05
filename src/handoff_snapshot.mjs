@@ -1522,7 +1522,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
 
       // Collect handoff candidates: slot roster only so handoff items match the posting slot.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && slotRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && allRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1756,7 +1756,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
         // Only show handoff-tagged items for the current slot's engineers in the display block.
         const slug = getHandoffRegionValue(issue);
         if (!slug || !hasHandoffTag(issue)) continue;
-        if (!slotRosterIds.has(issue?.assignee?.id)) continue;
+        if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
@@ -1844,7 +1844,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioLabel = mapPriorityLabel(prioRaw);
 
       // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      if (slotRosterIds.has(assigneeId)) {
+      if (allRosterIds.has(assigneeId)) {
         const handoffSlug = getHandoffRegionValue(issue);
         if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
           handoffItems.set(issue.id, {
