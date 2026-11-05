@@ -689,10 +689,12 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
 const HANDOFF_MARKER = "<---Ticket Handoff--->";
 
 /**
- * Returns the body of the last internal (private) comment on an issue,
- * or null on error / no internal comments.
+ * Returns true if any internal (private) comment on the issue contains the
+ * handoff marker. Automated follow-up comments (e.g. "Set to On You" alerts)
+ * posted after the handoff must not suppress it, so we scan all internal
+ * comments rather than only the most recent one.
  */
-async function fetchLastInternalComment(pylonToken, issueId) {
+async function hasHandoffMarkerComment(pylonToken, issueId) {
   const maxAttempts = 4;
   let attempt = 0;
   while (true) {
@@ -704,7 +706,7 @@ async function fetchLastInternalComment(pylonToken, issueId) {
     if (res.status === 429) {
       if (attempt >= maxAttempts) {
         console.warn(`[HANDOFF-MSG] 429 after ${maxAttempts} attempts for issue ${issueId}; skipping`);
-        return null;
+        return false;
       }
       await sleep(Math.min(30000, 750 * 2 ** (attempt - 1)));
       continue;
@@ -713,24 +715,14 @@ async function fetchLastInternalComment(pylonToken, issueId) {
     let json;
     try { json = JSON.parse(text); } catch {
       console.warn(`[HANDOFF-MSG] Non-JSON for issue ${issueId}: ${text.slice(0, 200)}`);
-      return null;
+      return false;
     }
     if (!res.ok) {
       console.warn(`[HANDOFF-MSG] Failed for issue ${issueId} (${res.status})`);
-      return null;
+      return false;
     }
     const messages = Array.isArray(json.data) ? json.data : [];
-    let lastInternal = null;
-    let lastInternalTime = null;
-    for (const msg of messages) {
-      if (!msg.is_private) continue;
-      const t = parseMsgTime(msg);
-      if (t && (!lastInternalTime || t > lastInternalTime)) {
-        lastInternalTime = t;
-        lastInternal = msg;
-      }
-    }
-    return lastInternal?.body ?? null;
+    return messages.some(msg => msg.is_private && typeof msg.body === "string" && msg.body.includes(HANDOFF_MARKER));
   }
 }
 
@@ -2201,14 +2193,16 @@ async function main() {
     ...handoff.handoffItems,
   ]);
 
-  // Final filter: last internal comment must contain the handoff marker.
+  // Final filter: at least one internal comment must contain the handoff marker.
+  // We scan all internal comments (not just the most recent) so that automated
+  // follow-up messages posted after the handoff do not suppress it.
   if (allHandoffItems.size > 0) {
     const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
     console.log(`[HANDOFF] Verifying ${allHandoffItems.size} candidate(s) via internal-comment check...`);
     for (const [id] of allHandoffItems) {
       try {
-        const body = await fetchLastInternalComment(pylonToken, id);
-        if (!body || !body.includes(HANDOFF_MARKER)) {
+        const hasMarker = await hasHandoffMarkerComment(pylonToken, id);
+        if (!hasMarker) {
           allHandoffItems.delete(id);
         }
       } catch (err) {
