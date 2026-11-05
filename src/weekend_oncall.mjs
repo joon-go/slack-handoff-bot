@@ -125,22 +125,27 @@ function ptHourUtc(year, month, day, hour) {
 // Window: Friday 18:00 PT → Sunday 18:00 PT.
 function getWeekendWindow() {
   const now = new Date();
-  const ptDow = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    weekday: "short",
-  }).format(now);
-  const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(ptDow);
-  const daysToFri = (5 - dowIndex + 7) % 7; // 0 when today is Friday
-
-  const approxFri = new Date(now.getTime() + daysToFri * 86_400_000);
-  const approxSun = new Date(now.getTime() + (daysToFri + 2) * 86_400_000);
 
   const ptDateFmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric", month: "numeric", day: "numeric",
+    weekday: "short", hour: "numeric", hour12: false,
   });
-  const ptParts = (d) =>
-    Object.fromEntries(ptDateFmt.formatToParts(d).map((p) => [p.type, p.value]));
+  const ptParts  = (d) => Object.fromEntries(ptDateFmt.formatToParts(d).map(p => [p.type, p.value]));
+  const nowParts = ptParts(now);
+  const ptDow    = nowParts.weekday;
+  const ptHour   = Number(nowParts.hour);
+
+  const dowIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(ptDow);
+
+  // On Saturday, or Sunday before 18:00 PT, stay on the current Fri–Sun window.
+  let daysToFri;
+  if (ptDow === "Sat")                    daysToFri = -1;
+  else if (ptDow === "Sun" && ptHour < 18) daysToFri = -2;
+  else                                     daysToFri = (5 - dowIndex + 7) % 7;
+
+  const approxFri = new Date(now.getTime() + daysToFri * 86_400_000);
+  const approxSun = new Date(now.getTime() + (daysToFri + 2) * 86_400_000);
 
   const friPt = ptParts(approxFri);
   const sunPt = ptParts(approxSun);
@@ -181,7 +186,9 @@ function formatCoverageWindow(regionSlug, rosters, friYear, friMonth, friDay) {
   };
   const s = extract(startUtc);
   const e = extract(endUtc);
-  return `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`;
+  return s.tz === e.tz
+    ? `${s.day} ${s.time}–${e.day} ${e.time} ${s.tz}`
+    : `${s.day} ${s.time} ${s.tz}–${e.day} ${e.time} ${e.tz}`;
 }
 
 async function resolveSlackMention(pdToken, slackToken, pdUser) {
