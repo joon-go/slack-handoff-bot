@@ -2208,26 +2208,7 @@ async function main() {
     ...handoff.handoffItems,
   ]);
 
-  // Final filter: at least one internal comment must contain the handoff marker.
-  // We scan all internal comments (not just the most recent) so that automated
-  // follow-up messages posted after the handoff do not suppress it.
-  if (allHandoffItems.size > 0) {
-    const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
-    console.log(`[HANDOFF] Verifying ${allHandoffItems.size} candidate(s) via internal-comment check...`);
-    for (const [id] of allHandoffItems) {
-      try {
-        const hasMarker = await hasHandoffMarkerComment(pylonToken, id);
-        if (!hasMarker) {
-          allHandoffItems.delete(id);
-        }
-      } catch (err) {
-        console.warn(`[HANDOFF] Unexpected error checking issue ${id}: ${err?.message || err}`);
-        allHandoffItems.delete(id);
-      }
-      await sleep(MSG_DELAY_MS);
-    }
-    console.log(`[HANDOFF] ${allHandoffItems.size} item(s) passed marker check.`);
-  }
+  console.log(`[HANDOFF] ${allHandoffItems.size} candidate(s) collected.`);
 
   const handoffIssues = allHandoffItems.size;
   const handoffIssueLines = handoffIssues > 0
