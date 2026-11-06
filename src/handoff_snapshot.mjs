@@ -722,7 +722,16 @@ async function hasHandoffMarkerComment(pylonToken, issueId) {
       return false;
     }
     const messages = Array.isArray(json.data) ? json.data : [];
-    return messages.some(msg => msg.is_private && typeof msg.body === "string" && msg.body.includes(HANDOFF_MARKER));
+    return messages.some(msg => {
+      if (!msg.is_private) return false;
+      // body_html encodes < and > as &lt; / &gt;, so decode before matching.
+      if (typeof msg.body_html === "string") {
+        const decoded = msg.body_html
+          .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+        if (decoded.includes(HANDOFF_MARKER)) return true;
+      }
+      return typeof msg.body === "string" && msg.body.includes(HANDOFF_MARKER);
+    });
   }
 }
 
