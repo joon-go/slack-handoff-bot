@@ -2112,7 +2112,9 @@ async function main() {
   if (unresolvedNames.length > 0) {
     const warning = `[ROSTER] Could not resolve ${unresolvedNames.length} name(s) to Pylon IDs: ${unresolvedNames.join(", ")}. Their issues will NOT be counted. Update rosters.json to match current Pylon display names.`;
     console.warn(warning);
-    await postToSlack({ slackToken, text: `:warning: ${warning}` });
+    if (process.env.DRY_RUN !== "true") {
+      await postToSlack({ slackToken, text: `:warning: ${warning}` });
+    }
   }
 
   const _rawLookback = Number(process.env.SCAN_B_LOOKBACK_DAYS);
