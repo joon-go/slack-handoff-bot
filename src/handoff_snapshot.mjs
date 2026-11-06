@@ -74,7 +74,7 @@ const CF_HANDOFF_REGION = "hand_off_region"; // single-select
 const CF_MEETING_REQUIRED = "handoff_call_required";
 
 // Open states (Pylon payload uses `state`)
-const OPEN_STATES = new Set(["new", "waiting_on_you", "waiting_on_customer", "on_hold"]);
+const OPEN_STATES = new Set(["new", "waiting_on_you", "waiting_on_customer", "on_hold", "on_another_team", "waiting_on_billing"]);
 
 // Priority buckets (Pylon priority values)
 const P0_P1_PRIORITIES = new Set(["urgent", "high"]);
@@ -1512,9 +1512,9 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: slot roster only so handoff items match the posting slot.
+      // Collect handoff candidates: any assignee is valid — handoff is not restricted to roster engineers.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && allRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1712,19 +1712,21 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
 }
 
 /**
- * Pass D: collect open handoff issues in waiting_on_customer and on_hold states.
+ * Pass D: collect open handoff issues for all non-closed states not covered by B or C.
  *
  * state=new is covered by SCAN-B and state=waiting_on_you by SCAN-C, so SCAN-D
- * only needs the remaining two open states to avoid redundant API passes.
- * Checks hand_off_region client-side.
- * No time-based lookback — finds any age handoff issue as long as it's open.
+ * covers the remaining open states. Handoff collection has no assignee restriction —
+ * any ticket on the L1+L2 / Billing Support team qualifies regardless of who it's
+ * assigned to. Checks hand_off_region client-side.
  */
 async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
   const handoffDisplay = new Map();
   const issueByNumber = new Map();
   let truncated = false;
 
-  for (const state of ["waiting_on_customer", "on_hold"]) {
+  const SCAN_D_STATES = ["waiting_on_customer", "on_hold", "on_another_team", "waiting_on_billing"];
+
+  for (const state of SCAN_D_STATES) {
     const filter = { field: "state", operator: "equals", value: state };
     let cursor = null;
     const seenCursors = new Set();
@@ -1739,22 +1741,26 @@ async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
 
       for (const issue of data) {
         if (!issue?.id) continue;
-        if (!allRosterIds.has(issue?.assignee?.id)) continue;
+        if (!isTeamL1L2(issue)) continue;
 
+        const assigneeId = issue?.assignee?.id;
         const prioRaw = getPriority(issue);
         const prioLabel = mapPriorityLabel(prioRaw);
-        issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
-        // Only show handoff-tagged items for the current slot's engineers in the display block.
+        // issueByNumber is used for suggestions — keep the roster restriction there.
+        if (allRosterIds.has(assigneeId)) {
+          issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: assigneeId ?? null });
+        }
+
+        // Handoff collection: any assignee is valid.
         const slug = getHandoffRegionValue(issue);
         if (!slug || !hasHandoffTag(issue)) continue;
-        if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
           number: issue.number,
           priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
+          assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(slug),
           meetingRequired: isMeetingRequired(issue),
         });
@@ -1835,19 +1841,17 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      if (allRosterIds.has(assigneeId)) {
-        const handoffSlug = getHandoffRegionValue(issue);
-        if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
-          handoffItems.set(issue.id, {
-            id: issue.id,
-            number: issue.number,
-            priorityLabel: prioLabel,
-            assigneeId: assigneeId ?? null,
-            handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
-            meetingRequired: isMeetingRequired(issue),
-          });
-        }
+      // Collect handoff candidates: any assignee is valid — handoff is not restricted to roster engineers.
+      const handoffSlug = getHandoffRegionValue(issue);
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+        handoffItems.set(issue.id, {
+          id: issue.id,
+          number: issue.number,
+          priorityLabel: prioLabel,
+          assigneeId: assigneeId ?? null,
+          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+          meetingRequired: isMeetingRequired(issue),
+        });
       }
 
       const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
