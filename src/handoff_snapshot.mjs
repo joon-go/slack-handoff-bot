@@ -2281,7 +2281,11 @@ async function main() {
     truncationWarnings,
   });
 
-  await postToSlack({ slackToken, text: slackText });
+  if (process.env.DRY_RUN === "true") {
+    console.log("[DRY_RUN] Skipping Slack post. Message:\n" + slackText);
+  } else {
+    await postToSlack({ slackToken, text: slackText });
+  }
 
   console.log("Posted handoff snapshot:", {
     slot,
