@@ -1031,7 +1031,8 @@ function buildHandoffIssueLines(handoffIssuesList, assigneeIdToName) {
         it.assigneeId ? (assigneeIdToName[it.assigneeId] || it.assigneeId) : "Unassigned";
       const region = it.handoffRegionLabel || "Unknown";
       const meeting = it.meetingRequired ? "Yes" : "No";
-      return `${it.priorityLabel}->${issueLink} | Assignee: ${assignee} | Handoff Region: ${region} | Handoff meeting required: ${meeting}`;
+      const suffix = isEnterpriseTier(it.tier ?? "unknown") ? " 📌" : "";
+      return `${it.priorityLabel}->${issueLink} | Assignee: ${assignee} | Handoff Region: ${region} | Handoff meeting required: ${meeting}${suffix}`;
     })
     .join("\n");
 }
@@ -1531,6 +1532,7 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
           assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
           meetingRequired: isMeetingRequired(issue),
+          tier: issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown",
         });
       }
 
@@ -1772,6 +1774,7 @@ async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
           assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(slug),
           meetingRequired: isMeetingRequired(issue),
+          tier: issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown",
         });
       }
 
@@ -1860,6 +1863,7 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
           assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
           meetingRequired: isMeetingRequired(issue),
+          tier: issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown",
         });
       }
 
