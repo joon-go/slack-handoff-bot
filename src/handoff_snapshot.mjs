@@ -74,7 +74,7 @@ const CF_HANDOFF_REGION = "hand_off_region"; // single-select
 const CF_MEETING_REQUIRED = "handoff_call_required";
 
 // Open states (Pylon payload uses `state`)
-const OPEN_STATES = new Set(["new", "waiting_on_you", "waiting_on_customer", "on_hold"]);
+const OPEN_STATES = new Set(["new", "waiting_on_you", "waiting_on_customer", "on_hold", "on_another_team", "waiting_on_billing"]);
 
 // Priority buckets (Pylon priority values)
 const P0_P1_PRIORITIES = new Set(["urgent", "high"]);
@@ -689,10 +689,12 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
 const HANDOFF_MARKER = "<---Ticket Handoff--->";
 
 /**
- * Returns the body of the last internal (private) comment on an issue,
- * or null on error / no internal comments.
+ * Returns true if any internal (private) comment on the issue contains the
+ * handoff marker. Automated follow-up comments (e.g. "Set to On You" alerts)
+ * posted after the handoff must not suppress it, so we scan all internal
+ * comments rather than only the most recent one.
  */
-async function fetchLastInternalComment(pylonToken, issueId) {
+async function hasHandoffMarkerComment(pylonToken, issueId) {
   const maxAttempts = 4;
   let attempt = 0;
   while (true) {
@@ -704,7 +706,7 @@ async function fetchLastInternalComment(pylonToken, issueId) {
     if (res.status === 429) {
       if (attempt >= maxAttempts) {
         console.warn(`[HANDOFF-MSG] 429 after ${maxAttempts} attempts for issue ${issueId}; skipping`);
-        return null;
+        return false;
       }
       await sleep(Math.min(30000, 750 * 2 ** (attempt - 1)));
       continue;
@@ -713,24 +715,23 @@ async function fetchLastInternalComment(pylonToken, issueId) {
     let json;
     try { json = JSON.parse(text); } catch {
       console.warn(`[HANDOFF-MSG] Non-JSON for issue ${issueId}: ${text.slice(0, 200)}`);
-      return null;
+      return false;
     }
     if (!res.ok) {
       console.warn(`[HANDOFF-MSG] Failed for issue ${issueId} (${res.status})`);
-      return null;
+      return false;
     }
     const messages = Array.isArray(json.data) ? json.data : [];
-    let lastInternal = null;
-    let lastInternalTime = null;
-    for (const msg of messages) {
-      if (!msg.is_private) continue;
-      const t = parseMsgTime(msg);
-      if (t && (!lastInternalTime || t > lastInternalTime)) {
-        lastInternalTime = t;
-        lastInternal = msg;
+    return messages.some(msg => {
+      if (!msg.is_private) return false;
+      // body_html encodes < and > as &lt; / &gt;, so decode before matching.
+      if (typeof msg.body_html === "string") {
+        const decoded = msg.body_html
+          .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+        if (decoded.includes(HANDOFF_MARKER)) return true;
       }
-    }
-    return lastInternal?.body ?? null;
+      return typeof msg.body === "string" && msg.body.includes(HANDOFF_MARKER);
+    });
   }
 }
 
@@ -1520,9 +1521,9 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: slot roster only so handoff items match the posting slot.
+      // Collect handoff candidates: any assignee is valid — handoff is not restricted to roster engineers.
       const handoffSlug = getHandoffRegionValue(issue);
-      if (handoffSlug && hasHandoffTag(issue) && allRosterIds.has(assigneeId) && !handoffItems.has(issue.id)) {
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
         handoffItems.set(issue.id, {
           id: issue.id,
           number: issue.number,
@@ -1720,19 +1721,21 @@ async function scanQueueMetrics({ pylonToken, assigneeIdToName, conversionTimes,
 }
 
 /**
- * Pass D: collect open handoff issues in waiting_on_customer and on_hold states.
+ * Pass D: collect open handoff issues for all non-closed states not covered by B or C.
  *
  * state=new is covered by SCAN-B and state=waiting_on_you by SCAN-C, so SCAN-D
- * only needs the remaining two open states to avoid redundant API passes.
- * Checks hand_off_region client-side.
- * No time-based lookback — finds any age handoff issue as long as it's open.
+ * covers the remaining open states. Handoff collection has no assignee restriction —
+ * any ticket on the L1+L2 / Billing Support team qualifies regardless of who it's
+ * assigned to. Checks hand_off_region client-side.
  */
 async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
   const handoffDisplay = new Map();
   const issueByNumber = new Map();
   let truncated = false;
 
-  for (const state of ["waiting_on_customer", "on_hold"]) {
+  const SCAN_D_STATES = ["waiting_on_customer", "on_hold", "on_another_team", "waiting_on_billing"];
+
+  for (const state of SCAN_D_STATES) {
     const filter = { field: "state", operator: "equals", value: state };
     let cursor = null;
     const seenCursors = new Set();
@@ -1747,22 +1750,26 @@ async function scanHandoffIssues({ pylonToken, allRosterIds, slotRosterIds }) {
 
       for (const issue of data) {
         if (!issue?.id) continue;
-        if (!allRosterIds.has(issue?.assignee?.id)) continue;
+        if (!isTeamL1L2(issue)) continue;
 
+        const assigneeId = issue?.assignee?.id;
         const prioRaw = getPriority(issue);
         const prioLabel = mapPriorityLabel(prioRaw);
-        issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: issue?.assignee?.id ?? null });
 
-        // Only show handoff-tagged items for the current slot's engineers in the display block.
+        // issueByNumber is used for suggestions — keep the roster restriction there.
+        if (allRosterIds.has(assigneeId)) {
+          issueByNumber.set(issue.number, { accountName: null, accountId: issue?.account?.id ?? null, priorityLabel: prioLabel, assigneeId: assigneeId ?? null });
+        }
+
+        // Handoff collection: any assignee is valid.
         const slug = getHandoffRegionValue(issue);
         if (!slug || !hasHandoffTag(issue)) continue;
-        if (!allRosterIds.has(issue?.assignee?.id)) continue;
 
         handoffDisplay.set(issue.id, {
           id: issue.id,
           number: issue.number,
           priorityLabel: prioLabel,
-          assigneeId: issue?.assignee?.id ?? null,
+          assigneeId: assigneeId ?? null,
           handoffRegionLabel: handoffLabelFromSlug(slug),
           meetingRequired: isMeetingRequired(issue),
         });
@@ -1843,19 +1850,17 @@ async function scanWaitingOnSupport({ pylonToken, assigneeIdToName, allRosterIds
       const prioRaw = getPriority(issue);
       const prioLabel = mapPriorityLabel(prioRaw);
 
-      // Collect handoff candidates: must have handoff region set and "handoff" tag.
-      if (allRosterIds.has(assigneeId)) {
-        const handoffSlug = getHandoffRegionValue(issue);
-        if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
-          handoffItems.set(issue.id, {
-            id: issue.id,
-            number: issue.number,
-            priorityLabel: prioLabel,
-            assigneeId: assigneeId ?? null,
-            handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
-            meetingRequired: isMeetingRequired(issue),
-          });
-        }
+      // Collect handoff candidates: any assignee is valid — handoff is not restricted to roster engineers.
+      const handoffSlug = getHandoffRegionValue(issue);
+      if (handoffSlug && hasHandoffTag(issue) && !handoffItems.has(issue.id)) {
+        handoffItems.set(issue.id, {
+          id: issue.id,
+          number: issue.number,
+          priorityLabel: prioLabel,
+          assigneeId: assigneeId ?? null,
+          handoffRegionLabel: handoffLabelFromSlug(handoffSlug),
+          meetingRequired: isMeetingRequired(issue),
+        });
       }
 
       const tierRaw = issue?.custom_fields?.support_tier?.values?.[0] ?? "unknown";
@@ -2201,14 +2206,16 @@ async function main() {
     ...handoff.handoffItems,
   ]);
 
-  // Final filter: last internal comment must contain the handoff marker.
+  // Final filter: at least one internal comment must contain the handoff marker.
+  // We scan all internal comments (not just the most recent) so that automated
+  // follow-up messages posted after the handoff do not suppress it.
   if (allHandoffItems.size > 0) {
     const MSG_DELAY_MS = Number(process.env.PYLON_MESSAGES_DELAY_MS || 500);
     console.log(`[HANDOFF] Verifying ${allHandoffItems.size} candidate(s) via internal-comment check...`);
     for (const [id] of allHandoffItems) {
       try {
-        const body = await fetchLastInternalComment(pylonToken, id);
-        if (!body || !body.includes(HANDOFF_MARKER)) {
+        const hasMarker = await hasHandoffMarkerComment(pylonToken, id);
+        if (!hasMarker) {
           allHandoffItems.delete(id);
         }
       } catch (err) {
