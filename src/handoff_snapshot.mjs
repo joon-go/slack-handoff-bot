@@ -722,6 +722,13 @@ async function hasHandoffMarkerComment(pylonToken, issueId) {
       return false;
     }
     const messages = Array.isArray(json.data) ? json.data : [];
+    // Debug: log first message keys to verify API response shape.
+    if (messages.length > 0) {
+      const sample = messages[0];
+      console.log(`[HANDOFF-MSG-DEBUG] issue=${issueId} total=${messages.length} keys=${Object.keys(sample).join(",")} is_private=${sample.is_private} has_body=${typeof sample.body} has_body_html=${typeof sample.body_html}`);
+    } else {
+      console.log(`[HANDOFF-MSG-DEBUG] issue=${issueId} total=0 raw_keys=${Object.keys(json).join(",")}`);
+    }
     return messages.some(msg => {
       if (!msg.is_private) return false;
       // body_html encodes < and > as &lt; / &gt;, so decode before matching.
