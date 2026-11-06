@@ -689,17 +689,17 @@ async function fetchWaitingOnSupportStatus({ pylonToken, issueId }) {
 const HANDOFF_MARKER = "<---Ticket Handoff--->";
 
 /**
- * Returns true if any internal (private) comment on the issue contains the
- * handoff marker. Automated follow-up comments (e.g. "Set to On You" alerts)
- * posted after the handoff must not suppress it, so we scan all internal
- * comments rather than only the most recent one.
+ * Returns true if any internal (private) message on the issue contains the
+ * handoff marker. Uses the issue endpoint with include_messages=true because
+ * the /messages endpoint only returns public messages; private/internal notes
+ * are only available via the full issue fetch.
  */
 async function hasHandoffMarkerComment(pylonToken, issueId) {
   const maxAttempts = 4;
   let attempt = 0;
   while (true) {
     attempt += 1;
-    const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}/messages`, {
+    const res = await fetch(`${PYLON_API_BASE}/issues/${issueId}?include_messages=true`, {
       method: "GET",
       headers: { Authorization: `Bearer ${pylonToken}`, Accept: "application/json" },
     });
@@ -721,7 +721,7 @@ async function hasHandoffMarkerComment(pylonToken, issueId) {
       console.warn(`[HANDOFF-MSG] Failed for issue ${issueId} (${res.status})`);
       return false;
     }
-    const messages = Array.isArray(json.data) ? json.data : [];
+    const messages = Array.isArray(json.messages) ? json.messages : [];
     return messages.some(msg => {
       if (!msg.is_private) return false;
       // body_html encodes < and > as &lt; / &gt;, so decode before matching.
@@ -2112,7 +2112,9 @@ async function main() {
   if (unresolvedNames.length > 0) {
     const warning = `[ROSTER] Could not resolve ${unresolvedNames.length} name(s) to Pylon IDs: ${unresolvedNames.join(", ")}. Their issues will NOT be counted. Update rosters.json to match current Pylon display names.`;
     console.warn(warning);
-    await postToSlack({ slackToken, text: `:warning: ${warning}` });
+    if (process.env.DRY_RUN !== "true") {
+      await postToSlack({ slackToken, text: `:warning: ${warning}` });
+    }
   }
 
   const _rawLookback = Number(process.env.SCAN_B_LOOKBACK_DAYS);
@@ -2274,7 +2276,11 @@ async function main() {
     truncationWarnings,
   });
 
-  await postToSlack({ slackToken, text: slackText });
+  if (process.env.DRY_RUN === "true") {
+    console.log("[DRY_RUN] Skipping Slack post. Message:\n" + slackText);
+  } else {
+    await postToSlack({ slackToken, text: slackText });
+  }
 
   console.log("Posted handoff snapshot:", {
     slot,
