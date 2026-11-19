@@ -119,17 +119,17 @@ const SLA_COVERAGE = {
 // Index mapping for SLA arrays
 const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
 
-// Hours from the previous slot's shift start to this slot's shift start.
-// Used to include tickets taken by each region's engineers during the overlap
-// period (when the previous shift was still active) in the per-agent breakdown.
-//   us_east        06:00 PT — prev emea        01:00 PT  = 5 h
-//   us_west        09:00 PT — prev us_east      06:00 PT  = 3 h
-//   emea           01:00 PT — prev apac_india   21:00 PT  = 4 h (cross-midnight)
-//   apac_australia 15:00 PT — prev us_west      09:00 PT  = 6 h
-//   apac_india     21:00 PT — prev apac_australia 15:00 PT = 6 h
+// Hours to scan back from this slot's start to cover all overlapping previous shifts.
+// A slot's overlap window = [slotStart - hours, slotStart).
+//   us_east        06:00 PT — emea (01:00–10:00) still active        → back 5 h to 01:00
+//   us_west        09:00 PT — emea (01:00–10:00) AND us_east (06:00–15:00) still active
+//                             → back 8 h to emea's 01:00 (the furthest active start)
+//   emea           01:00 PT — apac_india (21:00–06:00) still active  → back 4 h to 21:00 prev day
+//   apac_australia 15:00 PT — us_west (09:00–18:00) still active     → back 6 h to 09:00
+//   apac_india     21:00 PT — apac_australia (15:00–23:00) still active → back 6 h to 15:00
 const PREV_SLOT_OVERLAP_HOURS = {
   us_east:        5,
-  us_west:        3,
+  us_west:        8,  // two overlapping shifts: emea + us_east
   emea:           4,
   apac_australia: 6,
   apac_india:     6,
