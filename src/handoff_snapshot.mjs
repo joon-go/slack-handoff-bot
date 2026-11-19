@@ -119,6 +119,32 @@ const SLA_COVERAGE = {
 // Index mapping for SLA arrays
 const PRIORITY_IDX = { urgent: 0, high: 1, medium: 2, low: 3 };
 
+// Hours to scan back from this slot's start to cover all overlapping previous shifts.
+// A slot's overlap window = [slotStart - hours, slotStart).
+//   us_east        06:00 PT — emea (01:00–10:00) still active        → back 5 h to 01:00
+//   us_west        09:00 PT — emea (01:00–10:00) AND us_east (06:00–15:00) still active
+//                             → back 8 h to emea's 01:00 (the furthest active start)
+//   emea           01:00 PT — apac_india (21:00–06:00) still active  → back 4 h to 21:00 prev day
+//   apac_australia 15:00 PT — us_west (09:00–18:00) still active     → back 6 h to 09:00
+//   apac_india     21:00 PT — apac_australia (15:00–23:00) still active → back 6 h to 15:00
+const PREV_SLOT_OVERLAP_HOURS = {
+  us_east:        5,
+  us_west:        8,  // two overlapping shifts: emea + us_east
+  emea:           4,
+  apac_australia: 6,
+  apac_india:     6,
+};
+
+// PT clock hour at which the earliest overlapping previous slot begins.
+// Used to derive prevStartUtc in America/Los_Angeles local time (DST-safe).
+const PREV_SLOT_START_HOUR_PT = {
+  us_east:        1,   // emea starts 01:00 PT
+  us_west:        1,   // emea starts 01:00 PT (furthest overlap)
+  emea:           21,  // apac_india starts 21:00 PT (previous day)
+  apac_australia: 9,   // us_west starts 09:00 PT
+  apac_india:     15,  // apac_australia starts 15:00 PT
+};
+
 // Header labels (handoff-to sequence)
 const SLOT_CONFIG = {
   apac_india:     { headerLabel: "APAC India to EMEA" },
@@ -465,11 +491,12 @@ function regionLabelFromSlot(slot) {
  *  PYLON API
  *  ---------------------------- */
 
-async function pylonSearch({ token, limit = 200, cursor = null, filter = null }) {
+async function pylonSearch({ token, limit = 200, cursor = null, filter = null, sort = null }) {
   const path = "/issues/search";
   const body = { limit };
   if (cursor) body.cursor = cursor;
   if (filter) body.filter = filter;
+  if (sort) body.sort = sort;
 
   const maxAttempts = 8;
   let attempt = 0;
@@ -1391,8 +1418,25 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   const nowPt = ptNow();
   const { startUtc, endUtc } = getCreatedWindowForSlot(slot, nowPt);
 
+  // Extend scan back to the previous slot's start so tickets taken by each
+  // region's engineers during the overlap period are included in the breakdown.
+  const overlapHours = PREV_SLOT_OVERLAP_HOURS[slot] ?? 0;
+  let prevStartUtc;
+  if (overlapHours > 0) {
+    // Derive in PT local time so DST transitions don't shift the boundary.
+    const startPt = startUtc.setZone("America/Los_Angeles");
+    const prevHour = PREV_SLOT_START_HOUR_PT[slot];
+    let prevStartPt = startPt.startOf("day").set({ hour: prevHour });
+    if (prevStartPt >= startPt) prevStartPt = prevStartPt.minus({ days: 1 });
+    prevStartUtc = prevStartPt.toUTC();
+  } else {
+    prevStartUtc = startUtc;
+  }
+
   const createdIds = new Set();
-  const createdIssues = []; // human-assigned only (for roster breakdown)
+  const createdIssues = []; // human-assigned in current window (for total count)
+  const overlapIssues = []; // human-assigned in prev-slot overlap window (for breakdown only)
+  const overlapSeenIds = new Set();
   let aiTicketCount = 0;
 
   let cursor = null;
@@ -1403,7 +1447,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   while (true) {
     page += 1;
 
-    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
+    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, sort: [{ field: "created_at", order: "desc" }] });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
     for (const issue of data) {
@@ -1417,18 +1461,24 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
       if (!isAiAgent && !isRosterMember) continue;
 
       const createdAtUtc = parseUtcIso(issue.created_at);
-      if (!(createdAtUtc && createdAtUtc >= startUtc && createdAtUtc < endUtc)) continue;
-      if (createdIds.has(issue.id)) continue;
+      if (!createdAtUtc) continue;
 
-      createdIds.add(issue.id);
-
-      if (isAiAgent) {
-        // Count AI-handled tickets in the total but keep them out of the
-        // human roster breakdown (Assigned: block).
-        console.log(`[SCAN-A] ai-agent issue=${issue.id} number=${issue.number}`);
-        aiTicketCount++;
-      } else {
-        createdIssues.push(issue);
+      if (createdAtUtc >= startUtc && createdAtUtc < endUtc) {
+        // Current window: counts toward total and per-agent breakdown.
+        if (createdIds.has(issue.id)) continue;
+        createdIds.add(issue.id);
+        if (isAiAgent) {
+          console.log(`[SCAN-A] ai-agent issue=${issue.id} number=${issue.number}`);
+          aiTicketCount++;
+        } else {
+          createdIssues.push(issue);
+        }
+      } else if (overlapHours > 0 && isRosterMember && createdAtUtc >= prevStartUtc && createdAtUtc < startUtc) {
+        // Overlap window: counts toward per-agent breakdown only (not the shift total).
+        if (!overlapSeenIds.has(issue.id)) {
+          overlapSeenIds.add(issue.id);
+          overlapIssues.push(issue);
+        }
       }
     }
 
@@ -1441,13 +1491,13 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
     const nextCursor = resp?.pagination?.cursor ?? null;
 
     console.log(
-      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} aiAgent=${aiTicketCount}`
+      `[SCAN-A] page=${page} fetched=${data.length} createdInShift=${createdIds.size} overlap=${overlapIssues.length} aiAgent=${aiTicketCount}`
     );
 
     if (!hasNext || !nextCursor) break;
 
-    // Safe early-stop for created-window counting
-    if (oldestUtc && oldestUtc < startUtc) break;
+    // Stop once we've scanned past the previous slot's start (covers both windows).
+    if (oldestUtc && oldestUtc < prevStartUtc) break;
 
     if (seenCursors.has(nextCursor)) {
       console.warn(`[SCAN-A] cursor repeated; stopping to avoid infinite paging.`);
@@ -1464,7 +1514,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
     await sleep(200);
   }
 
-  return { count: createdIds.size, issues: createdIssues, aiCount: aiTicketCount };
+  return { count: createdIds.size, issues: createdIssues, aiCount: aiTicketCount, overlapIssues };
 }
 
 /**
@@ -2140,9 +2190,11 @@ async function main() {
   const newTicketsDuringShiftCount = created.count; // total incl. AI-agent tickets
   const humanAgentCount = created.issues.length;
   const aiAgentCount = created.aiCount;
-  // Assigned breakdown + per-region new-ticket counts, both derived from created.issues.
+  // Per-agent breakdown includes overlap tickets from the previous slot's window
+  // so each region's total reflects the full activity of its engineers.
+  const allIssuesForBreakdown = [...created.issues, ...created.overlapIssues];
   const regionBreakdowns = allSubRegions.map(r => {
-    const bd = formatAssignedBreakdownForShift(r, created.issues, assigneeIdToName);
+    const bd = formatAssignedBreakdownForShift(r, allIssuesForBreakdown, assigneeIdToName);
     return { label: SUB_REGION_LABELS[r], pylon: bd.pylon, count: bd.assignedCount };
   });
   const allRegionsBreakdown  = regionBreakdowns.map(b => `[${b.label}] ${b.pylon}`).join("\n");
