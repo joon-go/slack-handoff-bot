@@ -1447,7 +1447,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   while (true) {
     page += 1;
 
-    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, sort: "created_at_desc" });
+    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, sort: [{ field: "created_at", order: "desc" }] });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
     for (const issue of data) {
