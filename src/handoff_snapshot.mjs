@@ -135,6 +135,16 @@ const PREV_SLOT_OVERLAP_HOURS = {
   apac_india:     6,
 };
 
+// PT clock hour at which the earliest overlapping previous slot begins.
+// Used to derive prevStartUtc in America/Los_Angeles local time (DST-safe).
+const PREV_SLOT_START_HOUR_PT = {
+  us_east:        1,   // emea starts 01:00 PT
+  us_west:        1,   // emea starts 01:00 PT (furthest overlap)
+  emea:           21,  // apac_india starts 21:00 PT (previous day)
+  apac_australia: 9,   // us_west starts 09:00 PT
+  apac_india:     15,  // apac_australia starts 15:00 PT
+};
+
 // Header labels (handoff-to sequence)
 const SLOT_CONFIG = {
   apac_india:     { headerLabel: "APAC India to EMEA" },
@@ -481,11 +491,12 @@ function regionLabelFromSlot(slot) {
  *  PYLON API
  *  ---------------------------- */
 
-async function pylonSearch({ token, limit = 200, cursor = null, filter = null }) {
+async function pylonSearch({ token, limit = 200, cursor = null, filter = null, sort = null }) {
   const path = "/issues/search";
   const body = { limit };
   if (cursor) body.cursor = cursor;
   if (filter) body.filter = filter;
+  if (sort) body.sort = sort;
 
   const maxAttempts = 8;
   let attempt = 0;
@@ -1410,11 +1421,22 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   // Extend scan back to the previous slot's start so tickets taken by each
   // region's engineers during the overlap period are included in the breakdown.
   const overlapHours = PREV_SLOT_OVERLAP_HOURS[slot] ?? 0;
-  const prevStartUtc = startUtc.minus({ hours: overlapHours });
+  let prevStartUtc;
+  if (overlapHours > 0) {
+    // Derive in PT local time so DST transitions don't shift the boundary.
+    const startPt = startUtc.setZone("America/Los_Angeles");
+    const prevHour = PREV_SLOT_START_HOUR_PT[slot];
+    let prevStartPt = startPt.startOf("day").set({ hour: prevHour });
+    if (prevStartPt >= startPt) prevStartPt = prevStartPt.minus({ days: 1 });
+    prevStartUtc = prevStartPt.toUTC();
+  } else {
+    prevStartUtc = startUtc;
+  }
 
   const createdIds = new Set();
   const createdIssues = []; // human-assigned in current window (for total count)
   const overlapIssues = []; // human-assigned in prev-slot overlap window (for breakdown only)
+  const overlapSeenIds = new Set();
   let aiTicketCount = 0;
 
   let cursor = null;
@@ -1425,7 +1447,7 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
   while (true) {
     page += 1;
 
-    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor });
+    const resp = await pylonSearch({ token: pylonToken, limit: 200, cursor, sort: "created_at_desc" });
     const data = Array.isArray(resp.data) ? resp.data : [];
 
     for (const issue of data) {
@@ -1453,7 +1475,10 @@ async function scanCreatedDuringShift({ slot, pylonToken, allRosterIds }) {
         }
       } else if (overlapHours > 0 && isRosterMember && createdAtUtc >= prevStartUtc && createdAtUtc < startUtc) {
         // Overlap window: counts toward per-agent breakdown only (not the shift total).
-        overlapIssues.push(issue);
+        if (!overlapSeenIds.has(issue.id)) {
+          overlapSeenIds.add(issue.id);
+          overlapIssues.push(issue);
+        }
       }
     }
 
